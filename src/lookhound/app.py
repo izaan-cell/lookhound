@@ -347,13 +347,13 @@ class Window(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Lookhound")
-        self.setMinimumSize(560, 480)
+        self.setMinimumSize(600, 740)
         self.setAcceptDrops(True)
         self.colors = COLORS
         self.setStyleSheet(stylesheet(self.colors))
 
         self.prefs = load_prefs()
-        width, height = self.prefs.get("window", (820, 680))
+        width, height = self.prefs.get("window", (860, 760))
         self.resize(width, height)
         self.shelf = Shelf()  # the GUI thread's own read-only look at the index
         self.brain = Brain()
@@ -438,7 +438,7 @@ class Window(QMainWindow):
         dog_pix = QPixmap(str(RESOURCES / "lookhound-illustration.png"))
         if not dog_pix.isNull():
             ratio = self.devicePixelRatioF()
-            dog_pix = dog_pix.scaledToHeight(int(120 * ratio), Qt.TransformationMode.SmoothTransformation)
+            dog_pix = dog_pix.scaledToHeight(int(104 * ratio), Qt.TransformationMode.SmoothTransformation)
             dog_pix.setDevicePixelRatio(ratio)
             dog.setPixmap(dog_pix)
             # The dog is drawn in black ink, so it sits on a little paper card.
@@ -634,15 +634,16 @@ class Window(QMainWindow):
 
     def _refresh_home(self):
         clear_layout(self.recent_row)
-        recent = self.prefs.get("recent", [])[:4]
+        recent = self.prefs.get("recent", [])[:3]
         self.recent_box.setVisible(bool(recent))
         if recent:
             self.recent_row.addStretch()
-            lead = QLabel("Lately you looked for")
+            lead = QLabel("Lately:")
             lead.setObjectName("muted")
             self.recent_row.addWidget(lead)
             for text in recent:
-                btn = QPushButton(text if len(text) < 28 else text[:26] + "…")
+                btn = QPushButton(text if len(text) <= 22 else text[:21].rstrip() + "…")
+                btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
                 btn.setObjectName("recent")
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.clicked.connect(lambda _=False, t=text: self._search_for(t))
