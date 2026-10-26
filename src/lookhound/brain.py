@@ -37,7 +37,12 @@ class Brain:
                         kwargs["trust_remote_code"] = True
                         kwargs["revision"] = JINA_REVISION
                         kwargs["model_kwargs"] = {"code_revision": JINA_CODE_REVISION}
-                    model = SentenceTransformer(MODEL_IDS[name], **kwargs)
+                    try:
+                        # Once downloaded, never touch the network again: no update
+                        # checks, no stalls when offline.
+                        model = SentenceTransformer(MODEL_IDS[name], local_files_only=True, **kwargs)
+                    except Exception:
+                        model = SentenceTransformer(MODEL_IDS[name], **kwargs)  # first run
                     if name == "code":
                         # Jina allows 8k tokens; a file's opening is plenty and far faster.
                         model.max_seq_length = 512
