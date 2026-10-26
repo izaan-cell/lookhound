@@ -431,6 +431,17 @@ class Window(QMainWindow):
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._home)
         bar.addWidget(back)
+        badge = QLabel()
+        badge_pix = QPixmap(str(RESOURCES / "lookhound-128.png"))
+        if not badge_pix.isNull():
+            ratio = self.devicePixelRatioF()
+            badge_pix = badge_pix.scaled(int(40 * ratio), int(40 * ratio),
+                                         Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+            badge_pix.setDevicePixelRatio(ratio)
+            badge.setPixmap(badge_pix)
+        badge.setToolTip("Lookhound")
+        bar.addWidget(badge)
         self.query = search_field("Describe what you're looking for…")
         bar.addWidget(self.query, 1)
 
