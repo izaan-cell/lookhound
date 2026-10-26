@@ -23,14 +23,74 @@ def _try_load_vec(conn):
         return False
 
 
+class _ApswCursor:
+    def __init__(self, cursor, conn):
+        self._rows = list(cursor)
+        self.lastrowid = conn.last_insert_rowid()
+
+    def fetchall(self):
+        return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _ApswConnection:
+    """Just enough of sqlite3.Connection on top of apsw. Packaged builds use this:
+    their Python's sqlite3 can't load extensions, but apsw brings its own SQLite
+    that can, so sqlite-vec still works."""
+
+    def __init__(self, path):
+        import apsw
+        import sqlite_vec
+
+        self._conn = apsw.Connection(path)
+        self._conn.set_busy_timeout(30_000)
+        self._conn.enable_load_extension(True)
+        self._conn.load_extension(sqlite_vec.loadable_path())
+        self._in_tx = False
+
+    def execute(self, sql, params=()):
+        # Group writes into one transaction until commit(), like sqlite3 does.
+        if not self._in_tx and sql.lstrip().split(None, 1)[0].upper() in ("INSERT", "DELETE", "UPDATE"):
+            self._conn.execute("BEGIN")
+            self._in_tx = True
+        return _ApswCursor(self._conn.execute(sql, params), self._conn)
+
+    def commit(self):
+        if self._in_tx:
+            self._conn.execute("COMMIT")
+            self._in_tx = False
+
+
+def _connect(path):
+    """(connection, sqlite-vec loaded?) using the best SQLite available."""
+    conn = sqlite3.connect(str(path), timeout=30)
+    if _try_load_vec(conn):
+        return conn, True
+    try:
+        apsw_conn = _ApswConnection(str(path))
+    except Exception:
+        return conn, False
+    conn.close()
+    return apsw_conn, True
+
+
 class Shelf:
     """Open one per thread."""
 
     def __init__(self, path=DB_PATH):
-        self.conn = sqlite3.connect(str(path), timeout=30)
+        self.conn, loaded = _connect(path)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
-        self.has_vec = _try_load_vec(self.conn)
+        # An index first built without sqlite-vec keeps its plain tables.
+        row = self.conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'vec_clip'"
+        ).fetchone()
+        self.has_vec = loaded and (row is None or "vec0" in row[0])
         self._create()
 
     def _create(self):
