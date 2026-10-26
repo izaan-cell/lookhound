@@ -1,20 +1,22 @@
 """The Lookhound window: a centered home screen, and a results page that opens
 when you search."""
+import os
 import queue
 import subprocess
 import sys
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QFileInfo, QObject, QSize, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import (
-    QAbstractFileIconProvider, QFont, QFontDatabase, QGuiApplication, QIcon, QPainter,
+    QAbstractFileIconProvider, QFont, QFontDatabase, QIcon, QPainter,
     QPainterPath, QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFileIconProvider,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -22,21 +24,17 @@ from . import updater
 from .brain import Brain
 from .hunt import FILTERS, Hunter
 from .scout import Scout
+from .shelf import Shelf
 from .settings import ICON_CACHE, IS_MAC, IS_WIN, load_prefs, save_prefs
 from .sniff import IMAGE_EXT
 
 RESOURCES = Path(__file__).parent / "resources"
 
-# Warm ivory paper, near-black ink, and the burnt orange from the logo.
-LIGHT = {
-    "bg": "#F7F1E6", "card": "#FFFDF9", "card_hover": "#F1ECE3", "ink": "#1D1B18",
-    "muted": "#857D72", "line": "#E4DDD1", "accent": "#B86F30", "button": "#1D1B18",
-    "button_ink": "#F7F1E6", "field": "#FFFDF9", "tile": "#EFE6D6",
-}
-DARK = {
+# Always the warm dark brown, cream ink, and the burnt orange from the logo.
+COLORS = {
     "bg": "#141311", "card": "#1C1A17", "card_hover": "#22201C", "ink": "#EEE8DE",
     "muted": "#9A9184", "line": "#2E2B26", "accent": "#E09A5C", "button": "#EEE8DE",
-    "button_ink": "#141311", "field": "#1C1A17", "tile": "#25221E",
+    "button_ink": "#141311", "field": "#1C1A17", "tile": "#25221E", "paper": "#EFE6D6",
 }
 KIND_WORDS = {"image": "Picture", "document": "Writing", "code": "Code", "app": "App"}
 CHIPS = [("all", "Everything"), ("image", "Pictures"), ("document", "Writing"),
@@ -80,7 +78,76 @@ def stylesheet(c):
     QWidget#imagechip {{ background: {c['field']}; border: 1px solid {c['line']}; border-radius: 8px; }}
     QListWidget#folders {{ background: {c['card']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 6px; }}
     QDialog QPushButton {{ color: {c['ink']}; }}
+    QPushButton#greeting {{
+        margin: 0; padding: 2px 6px; color: {c['accent']}; font-size: 11px; font-weight: 600;
+        letter-spacing: 2px;
+    }}
+    QPushButton#greeting:hover {{ border-bottom: 1px solid {c['accent']}; }}
+    QPushButton#recent {{
+        margin: 0; padding: 4px 10px; border: 1px solid {c['line']}; border-radius: 13px;
+        color: {c['ink']}; font-size: 12px;
+    }}
+    QPushButton#recent:hover {{ border-color: {c['accent']}; color: {c['accent']}; }}
+    QPushButton#fresh {{
+        margin: 0; padding: 7px 4px; color: {c['muted']}; font-size: 13px;
+        border-bottom: 1px solid {c['line']};
+    }}
+    QPushButton#fresh:hover {{ color: {c['ink']}; }}
     """
+
+
+RECENT_KEEP = 6
+NOTHING_FOUND = ("I couldn't find that one.\n"
+                 "Try describing it another way, or check Folders to make sure I'm looking there.")
+
+
+def first_name():
+    """The person's first name from their account, or a gentle fallback."""
+    name = ""
+    try:
+        if IS_WIN:
+            import ctypes
+
+            size = ctypes.c_ulong(256)
+            buf = ctypes.create_unicode_buffer(256)
+            if ctypes.windll.secur32.GetUserNameExW(3, buf, ctypes.byref(size)):  # display name
+                name = buf.value
+        else:
+            import pwd
+
+            name = pwd.getpwuid(os.getuid()).pw_gecos.split(",")[0]
+    except Exception:
+        pass
+    if not name:
+        import getpass
+
+        name = getpass.getuser()
+    first = name.replace(".", " ").split()[0] if name.strip() else ""
+    return first[:1].upper() + first[1:]
+
+
+def greet(name=None):
+    """(greeting, comforting line) for the time of day. An empty saved name means
+    the person asked not to be called anything."""
+    if name is None:
+        name = first_name()
+    hour = datetime.now().hour
+    if 5 <= hour < 12:
+        part, comfort = "Good morning", "Take your time. Describe it however you like."
+    elif 12 <= hour < 17:
+        part, comfort = "Good afternoon", "Describe it in your own words, or show me a picture."
+    elif 17 <= hour < 22:
+        part, comfort = "Good evening", "Describe it in your own words, or show me a picture."
+    else:
+        part, comfort = "Still up", "Let's find it quickly, then you can rest."
+    return (f"{part}, {name}" if name else part), comfort
+
+
+def clear_layout(layout):
+    while layout.count():
+        item = layout.takeAt(0)
+        if item.widget():
+            item.widget().deleteLater()
 
 
 def reveal(path):
@@ -280,14 +347,15 @@ class Window(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Lookhound")
-        self.resize(820, 680)
         self.setMinimumSize(560, 480)
         self.setAcceptDrops(True)
-        self.dark = QGuiApplication.styleHints().colorScheme() == Qt.ColorScheme.Dark
-        self.colors = DARK if self.dark else LIGHT
+        self.colors = COLORS
         self.setStyleSheet(stylesheet(self.colors))
 
         self.prefs = load_prefs()
+        width, height = self.prefs.get("window", (820, 680))
+        self.resize(width, height)
+        self.shelf = Shelf()  # the GUI thread's own read-only look at the index
         self.brain = Brain()
         self.icons = IconMaker()
         self.scout = Scout(self.brain, self.prefs["folders"], self.icons.icon_for)
@@ -299,13 +367,19 @@ class Window(QMainWindow):
         self._build()
         self.scout.status.connect(self.status.setText)
         self.scout.count_changed.connect(
-            lambda n: self.count.setText(f"{n:,} files indexed"))
+            lambda n: self.count.setText(f"Looking after {n:,} files"))
+        self.home_timer = QTimer(self, singleShot=True, interval=3000)
+        self.home_timer.timeout.connect(
+            lambda: self.pages.currentIndex() == 0 and self._refresh_home())
+        self.scout.count_changed.connect(lambda _: self.home_timer.start())
         self.searcher.results.connect(self._show_results)
         self.update_found.connect(self._show_update)
         self.debounce = QTimer(self, singleShot=True, interval=280)
         self.debounce.timeout.connect(self._search)
         self.query.textChanged.connect(lambda: self.debounce.start())
 
+        self._restore_filter()
+        self._refresh_home()
         self.scout.start()
         threading.Thread(target=self._check_update, daemon=True).start()
 
@@ -336,7 +410,7 @@ class Window(QMainWindow):
         lay.addWidget(self.pages, 1)
 
         foot = QHBoxLayout()
-        self.status = QLabel("Starting…")
+        self.status = QLabel("Waking up…")
         self.status.setObjectName("muted")
         self.count = QLabel("")
         self.count.setObjectName("muted")
@@ -364,27 +438,30 @@ class Window(QMainWindow):
         dog_pix = QPixmap(str(RESOURCES / "lookhound-illustration.png"))
         if not dog_pix.isNull():
             ratio = self.devicePixelRatioF()
-            dog_pix = dog_pix.scaledToHeight(int(150 * ratio), Qt.TransformationMode.SmoothTransformation)
+            dog_pix = dog_pix.scaledToHeight(int(120 * ratio), Qt.TransformationMode.SmoothTransformation)
             dog_pix.setDevicePixelRatio(ratio)
             dog.setPixmap(dog_pix)
-            if self.dark:  # black ink vanishes on dark, so give the dog a paper card
-                dog.setStyleSheet("background: #EFE6D6; border-radius: 22px; padding: 14px;")
-                dog.setFixedWidth(int(dog_pix.width() / ratio) + 28)
+            # The dog is drawn in black ink, so it sits on a little paper card.
+            dog.setStyleSheet(f"background: {self.colors['paper']}; border-radius: 22px; padding: 14px;")
+            dog.setFixedSize(int(dog_pix.width() / ratio) + 28, int(dog_pix.height() / ratio) + 28)
         dog_row = QHBoxLayout()
         dog_row.addStretch()
         dog_row.addWidget(dog)
         dog_row.addStretch()
         col.addLayout(dog_row)
 
-        eyebrow = QLabel("LOOKHOUND")
-        eyebrow.setObjectName("eyebrow")
-        eyebrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        col.addWidget(eyebrow)
+        greeting, comfort = greet(self.prefs.get("name"))
+        self.greeting = QPushButton(greeting.upper())
+        self.greeting.setObjectName("greeting")
+        self.greeting.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.greeting.setToolTip("Tell me what to call you")
+        self.greeting.clicked.connect(self._ask_name)
+        col.addWidget(self.greeting, 0, Qt.AlignmentFlag.AlignCenter)
 
-        hello = QLabel("What are you <i>looking</i> for?")
+        hello = QLabel("What can I <i>find</i> for you?")
         hello.setObjectName("hello")
         hello.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub = QLabel("Describe a file in your own words, or show it a picture.")
+        self.comfort = sub = QLabel(comfort)
         sub.setObjectName("sub")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(hello)
@@ -407,6 +484,19 @@ class Window(QMainWindow):
         hint.setObjectName("hint")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(hint)
+        col.addSpacing(18)
+
+        self.recent_box = QWidget()
+        self.recent_row = QHBoxLayout(self.recent_box)
+        self.recent_row.setContentsMargins(0, 0, 0, 0)
+        self.recent_row.setSpacing(4)
+        col.addWidget(self.recent_box)
+
+        self.fresh_box = QWidget()
+        self.fresh_col = QVBoxLayout(self.fresh_box)
+        self.fresh_col.setContentsMargins(0, 6, 0, 0)
+        self.fresh_col.setSpacing(0)
+        col.addWidget(self.fresh_box)
         col.addStretch(4)
 
         holder = QWidget()
@@ -471,6 +561,7 @@ class Window(QMainWindow):
             btn.setChecked(key == "all")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
+            btn.setProperty("key", key)
             self.chip_group.addButton(btn)
             chips.addWidget(btn)
         chips.addStretch()
@@ -497,6 +588,8 @@ class Window(QMainWindow):
         text = self.home_query.text().strip()
         if not text and self.image is None:
             return
+        if text:
+            self._remember(text)
         self.query.blockSignals(True)
         self.query.setText(text)
         self.query.blockSignals(False)
@@ -511,6 +604,73 @@ class Window(QMainWindow):
         self.list.clear()
         self.pages.setCurrentIndex(0)
         self.home_query.setFocus()
+        self._refresh_home()
+
+    # ---- the home screen's little helpers ----------------------------------
+
+    def _remember(self, text):
+        recent = [t for t in self.prefs.get("recent", []) if t.lower() != text.lower()]
+        self.prefs["recent"] = [text] + recent[:RECENT_KEEP - 1]
+        save_prefs(self.prefs)
+
+    def _ask_name(self):
+        current = self.prefs.get("name") or first_name()
+        name, ok = QInputDialog.getText(self, "Lookhound", "What should I call you?", text=current)
+        if ok:
+            self.prefs["name"] = name.strip()
+            save_prefs(self.prefs)
+            greeting, comfort = greet(self.prefs["name"])
+            self.greeting.setText(greeting.upper())
+            self.comfort.setText(comfort)
+
+    def _forget_recent(self):
+        self.prefs["recent"] = []
+        save_prefs(self.prefs)
+        self._refresh_home()
+
+    def _search_for(self, text):
+        self.home_query.setText(text)
+        self._go()
+
+    def _refresh_home(self):
+        clear_layout(self.recent_row)
+        recent = self.prefs.get("recent", [])[:4]
+        self.recent_box.setVisible(bool(recent))
+        if recent:
+            self.recent_row.addStretch()
+            lead = QLabel("Lately you looked for")
+            lead.setObjectName("muted")
+            self.recent_row.addWidget(lead)
+            for text in recent:
+                btn = QPushButton(text if len(text) < 28 else text[:26] + "…")
+                btn.setObjectName("recent")
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.clicked.connect(lambda _=False, t=text: self._search_for(t))
+                self.recent_row.addWidget(btn)
+            forget = QPushButton("forget")
+            forget.setObjectName("quiet")
+            forget.setToolTip("Clear your recent searches")
+            forget.setCursor(Qt.CursorShape.PointingHandCursor)
+            forget.clicked.connect(self._forget_recent)
+            self.recent_row.addWidget(forget)
+            self.recent_row.addStretch()
+
+        clear_layout(self.fresh_col)
+        fresh = self.shelf.newest(3)
+        self.fresh_box.setVisible(bool(fresh))
+        if fresh:
+            title = QLabel("NEW ON YOUR COMPUTER")
+            title.setObjectName("eyebrow")
+            title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.fresh_col.addWidget(title)
+            self.fresh_col.addSpacing(6)
+            for row in fresh:
+                btn = QPushButton(f"{row['name']}    ·    {Path(row['path']).parent.name}")
+                btn.setObjectName("fresh")
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setToolTip(f"Show it in {'Finder' if IS_MAC else 'File Explorer'}")
+                btn.clicked.connect(lambda _=False, p=row["path"]: reveal(p))
+                self.fresh_col.addWidget(btn)
 
     def _say(self, text):
         self.list.hide()
@@ -521,7 +681,15 @@ class Window(QMainWindow):
 
     def _set_filter(self, key):
         self.kinds = FILTERS[key]
+        self.prefs["filter"] = key
         self._search()
+
+    def _restore_filter(self):
+        key = self.prefs.get("filter", "all")
+        for btn in self.chip_group.buttons():
+            if btn.property("key") == key:
+                btn.setChecked(True)
+                self.kinds = FILTERS.get(key)
 
     def _search(self):
         if self.pages.currentIndex() != 1:
@@ -529,10 +697,10 @@ class Window(QMainWindow):
         text = self.query.text()
         if not text.strip() and self.image is None:
             self.list.clear()
-            self._say("Type something to look for.")
+            self._say("Tell me what you're after, and I'll go and look.")
             return
         self.ticket += 1
-        self._say("Searching…")
+        self._say("Looking…")
         self.searcher.ask(self.ticket, text, self.image, self.kinds)
 
     @Slot(list, int)
@@ -541,7 +709,7 @@ class Window(QMainWindow):
             return
         self.list.clear()
         if not results:
-            self._say("Nothing yet. Try describing it another way.")
+            self._say(NOTHING_FOUND)
             return
         self.empty.hide()
         self.list.show()
@@ -622,6 +790,8 @@ class Window(QMainWindow):
         self.banner.show()
 
     def closeEvent(self, event):
+        self.prefs["window"] = [self.width(), self.height()]
+        save_prefs(self.prefs)
         self.scout.stop()
         super().closeEvent(event)
 

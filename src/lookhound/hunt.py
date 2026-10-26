@@ -6,7 +6,7 @@ Each model scores on its own scale (CLIP text-to-image similarities sit around
 from .shelf import Shelf
 
 # (floor, ceiling) of "meaningful" similarity per space, measured by hand.
-TEXT_QUERY_SCALE = {"clip": (0.18, 0.33), "text": (0.15, 0.70), "code": (0.25, 0.75)}
+TEXT_QUERY_SCALE = {"clip": (0.21, 0.33), "text": (0.15, 0.70), "code": (0.25, 0.75)}
 IMAGE_QUERY_SCALE = {"clip": (0.55, 0.95)}
 
 FILTERS = {
@@ -17,7 +17,7 @@ FILTERS = {
     "app": {"app"},
 }
 NAME_BONUS = 0.35
-MIN_SCORE = 0.1
+MIN_SCORE = 0.15
 RELATIVE_FLOOR = 0.6
 
 

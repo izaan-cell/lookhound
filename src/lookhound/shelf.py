@@ -149,6 +149,15 @@ class Shelf:
                 best[fid] = sim
         return best
 
+    def newest(self, limit=3):
+        """The most recently changed files (apps don't count as news)."""
+        rows = self.conn.execute(
+            "SELECT path, name, kind FROM files WHERE kind != 'app' "
+            "ORDER BY mtime DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [{"path": r[0], "name": r[1], "kind": r[2]} for r in rows]
+
     def name_hits(self, text, limit=50):
         like = "%" + text.replace("%", "").replace("_", "") + "%"
         return [

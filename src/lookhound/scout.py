@@ -132,18 +132,18 @@ class Scout(QObject):
 
     def _full_scan(self, shelf):
         self.busy_changed.emit(True)
-        self.status.emit("Indexing your folders…")
+        self.status.emit("Getting to know your files…")
         on_disk = set()
         for n, path in enumerate(self._walk(), 1):
             on_disk.add(str(path))
             self._index(shelf, path)
             if n % 25 == 0:
-                self.status.emit(f"Indexing… {n:,} files read")
+                self.status.emit(f"Getting to know your files… {n:,} so far")
                 self.count_changed.emit(shelf.count())
         for stale in set(shelf.all_paths()) - on_disk:
             shelf.remove(stale)
         self.count_changed.emit(shelf.count())
-        self.status.emit("Up to date. Watching for changes.")
+        self.status.emit("All tucked in. I'll keep watch over your folders.")
         self.busy_changed.emit(False)
 
     def _watch(self):
@@ -159,9 +159,9 @@ class Scout(QObject):
     def _run(self):
         shelf = Shelf()
         self.count_changed.emit(shelf.count())
-        self.status.emit("Preparing. The first launch takes a few minutes.")
+        self.status.emit("Settling in. The very first time takes a few minutes.")
         self.busy_changed.emit(True)
-        self.brain.warm_up(lambda name: self.status.emit(f"Preparing ({list(DIMS).index(name) + 1} of 3)…"))
+        self.brain.warm_up(lambda name: self.status.emit(f"Settling in ({list(DIMS).index(name) + 1} of 3)…"))
         self._watch()
         self._full_scan(shelf)
         while not self._stop.is_set():
