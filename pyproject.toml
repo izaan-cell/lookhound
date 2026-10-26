@@ -50,8 +50,10 @@ requires = [
 ]
 
 [tool.briefcase.app.lookhound.macOS]
-# PyTorch ships Apple Silicon wheels only, so no universal (Intel+ARM) build.
+# PyTorch ships Apple Silicon wheels only, so no universal (Intel+ARM) build,
+# and PyTorch and PySide6 wheels need macOS 14 or newer.
 universal_build = false
+min_os_version = "14.0"
 requires = ["std-nslog~=1.0.3"]
 
 [tool.briefcase.app.lookhound.windows]
