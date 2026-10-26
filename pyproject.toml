@@ -1,0 +1,58 @@
+[project]
+name = "lookhound"
+version = "0.1.0"
+description = "Find any file on your computer by describing it. Fully local."
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "PySide6>=6.7",
+    "sentence-transformers>=3.0,<6",
+    "transformers>=4.44,<5",  # Jina-Code's remote code breaks on transformers 5
+    "torch>=2.4",
+    "einops",
+    "pillow>=10",
+    "pillow-heif",
+    "sqlite-vec>=0.1.6",
+    "watchdog>=4",
+    "pypdf>=4",
+    "python-docx>=1.1",
+    "platformdirs>=4",
+]
+
+[tool.briefcase]
+project_name = "Lookhound"
+bundle = "dev.lookhound"
+version = "0.1.0"
+url = "https://github.com/izaan-cell/lookhound"
+license.file = "LICENSE"
+author = "Izaan Hussain"
+author_email = "izaan@askwolfie.com"
+
+[tool.briefcase.app.lookhound]
+formal_name = "Lookhound"
+description = "Find any file on your computer by describing it. Fully local."
+long_description = "Search your photos, documents, code and apps by meaning, or with a picture. Nothing leaves your computer."
+icon = "src/lookhound/resources/lookhound"
+sources = ["src/lookhound"]
+requires = [
+    "PySide6>=6.7",
+    "sentence-transformers>=3.0,<6",
+    "transformers>=4.44,<5",  # Jina-Code's remote code breaks on transformers 5
+    "torch>=2.4",
+    "einops",
+    "pillow>=10",
+    "pillow-heif",
+    "sqlite-vec>=0.1.6",
+    "watchdog>=4",
+    "pypdf>=4",
+    "python-docx>=1.1",
+    "platformdirs>=4",
+]
+
+[tool.briefcase.app.lookhound.macOS]
+# PyTorch ships Apple Silicon wheels only, so no universal (Intel+ARM) build.
+universal_build = false
+requires = ["std-nslog~=1.0.3"]
+
+[tool.briefcase.app.lookhound.windows]
+requires = []

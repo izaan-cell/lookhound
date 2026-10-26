@@ -1,0 +1,78 @@
+name: Release
+
+# Push a tag like v0.2.0 to build the .dmg and .msi and publish them as a release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macOS
+            artifact: dist/*.dmg
+          - os: windows-latest
+            platform: windows
+            artifact: dist/*.msi
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Briefcase
+        run: python -m pip install --upgrade pip briefcase
+
+      - name: Build app
+        run: |
+          briefcase create ${{ matrix.platform }} --no-input
+          briefcase build ${{ matrix.platform }} --no-input
+
+      # Without a Developer ID certificate the .dmg is ad-hoc signed and macOS
+      # will warn on first open. Add signing secrets later and swap --adhoc-sign
+      # for --identity "Developer ID Application: ...".
+      - name: Package (macOS)
+        if: matrix.platform == 'macOS'
+        run: briefcase package macOS --adhoc-sign --no-input
+
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        run: briefcase package windows --adhoc-sign --no-input
+
+      # Fixed names so the website can always link to releases/latest/download/Lookhound.dmg
+      - name: Rename installer
+        shell: bash
+        run: |
+          cd dist
+          for f in Lookhound-*.dmg Lookhound-*.msi; do
+            [ -e "$f" ] && mv "$f" "Lookhound.${f##*.}"
+          done
+          ls
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lookhound-${{ matrix.platform }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
