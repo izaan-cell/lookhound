@@ -44,6 +44,15 @@ jobs:
         if: matrix.platform == 'macOS'
         run: briefcase package macOS --adhoc-sign --no-input
 
+      # Swap Briefcase's plain DMG for one with Lookhound's styled install window.
+      - name: Styled DMG (macOS)
+        if: matrix.platform == 'macOS'
+        run: |
+          python -m pip install dmgbuild
+          app=$(ls -d build/lookhound/macos/app/*.app | head -1)
+          rm -f dist/Lookhound-*.dmg
+          python packaging/make_dmg.py "$app" dist/Lookhound.dmg
+
       - name: Package (Windows)
         if: matrix.platform == 'windows'
         run: briefcase package windows --adhoc-sign --no-input
