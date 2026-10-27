@@ -21,11 +21,14 @@ jobs:
       run:
         shell: pwsh
     env:
-      LOOKHOUND_HOME: ${{ runner.temp }}\lookhound-home
-      SMOKE_OUT: ${{ runner.temp }}\smoke
       QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v5
+
+      - name: Choose scratch folders
+        run: |
+          "LOOKHOUND_HOME=$env:RUNNER_TEMP\lookhound-home" >> $env:GITHUB_ENV
+          "SMOKE_OUT=$env:RUNNER_TEMP\smoke" >> $env:GITHUB_ENV
 
       - name: Download the latest installer
         env:
