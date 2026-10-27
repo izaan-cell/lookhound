@@ -37,6 +37,13 @@ jobs:
           briefcase create ${{ matrix.platform }} --no-input
           briefcase build ${{ matrix.platform }} --no-input
 
+      # The packaged Python never writes bytecode, so without this every launch
+      # recompiles ~10,000 library files and the models take a minute to load.
+      # Same 3.12 as the bundled interpreter, so the .pyc files are valid there.
+      - name: Precompile Python
+        shell: bash
+        run: python -m compileall -q -j 0 --invalidation-mode unchecked-hash build/lookhound/*/app || true
+
       # Without a Developer ID certificate the .dmg is ad-hoc signed and macOS
       # will warn on first open. Add signing secrets later and swap --adhoc-sign
       # for --identity "Developer ID Application: ...".
