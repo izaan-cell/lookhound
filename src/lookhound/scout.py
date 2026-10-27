@@ -112,8 +112,10 @@ class Scout(QObject):
     def _inside_folders(self, path):
         return any(path == f or f in path.parents for f in self.folders)
 
-    def _prepare(self, shelf, path):
-        """What the models need from one file, or None if there's nothing to do."""
+    def _prepare(self, shelf, path, later=None):
+        """What the models need from one file, or None if there's nothing to do.
+        A file read before (same modified time) is skipped; one still waiting on
+        the code model just rejoins that queue without being read again."""
         try:
             if not path.exists() or not self._inside_folders(path):
                 shelf.remove(str(path))
@@ -121,9 +123,14 @@ class Scout(QObject):
             if path.is_dir() and sniff.kind_of(path) != "app":
                 return None
             mtime = path.stat().st_mtime
-            if shelf.mtime_of(str(path)) == mtime:
+            known = shelf.state(str(path))
+            if known and known[0] == mtime and known[1] == READ:
                 return None
             found = sniff.sniff(path, self.icon_for)
+            if known and known[0] == mtime and known[1] == PARTLY and later is not None:
+                if found and "code" in found[2]:
+                    later.append((str(path), found[2]["code"]))
+                    return None
             if not found:
                 return None
             return (path, mtime) + found
@@ -219,7 +226,7 @@ class Scout(QObject):
         total = len(paths)
         batch, later = [], []
         for n, path in enumerate(paths, 1):
-            prepared = self._prepare(shelf, path)
+            prepared = self._prepare(shelf, path, later)
             if prepared:
                 batch.append(prepared)
             if len(batch) >= BATCH or n == total:

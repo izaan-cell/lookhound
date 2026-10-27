@@ -41,8 +41,16 @@ def _device():
 class Brain:
     def __init__(self):
         self._models = {}
-        self._locks = {name: threading.Lock() for name in MODEL_IDS}
-        self._load_locks = {name: threading.Lock() for name in MODEL_IDS}
+        self._device = _device()
+        if self._device == "mps":
+            # Apple's GPU aborts the whole app if two threads use it at once, even
+            # for different models, so everything on it takes turns, loading included.
+            gpu = threading.RLock()
+            self._locks = {name: gpu for name in MODEL_IDS}
+            self._load_locks = self._locks
+        else:
+            self._locks = {name: threading.Lock() for name in MODEL_IDS}
+            self._load_locks = {name: threading.Lock() for name in MODEL_IDS}
         # Searches go first: indexing pauses while anyone is searching.
         self._searching = 0
         self._count_lock = threading.Lock()
@@ -71,7 +79,7 @@ class Brain:
                 if name not in self._models:
                     from sentence_transformers import SentenceTransformer
 
-                    kwargs = {"cache_folder": str(MODELS_DIR), "device": _device()}
+                    kwargs = {"cache_folder": str(MODELS_DIR), "device": self._device}
                     if name == "code":
                         # Jina runs its own modelling code; pin it so an upstream
                         # change can never slip new code onto users' machines.

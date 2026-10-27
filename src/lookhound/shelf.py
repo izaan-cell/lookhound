@@ -2,6 +2,7 @@
 tables. If the sqlite-vec extension can't load, vectors go in plain BLOB tables
 and are compared with numpy instead: slower, but the same answers."""
 import sqlite3
+import threading
 import time
 
 import numpy as np
@@ -10,6 +11,9 @@ from .brain import DIMS
 from .settings import DB_PATH
 
 SPACES = tuple(DIMS)
+# Several threads open the index at start-up; setting it up one at a time keeps
+# them from tripping over each other while tables are created or upgraded.
+_SETUP = threading.Lock()
 # files.ready: 0 = known by name only, 1 = fully read, 2 = read but waiting on the code model.
 NAME_ONLY, READ, PARTLY = 0, 1, 2
 
@@ -86,6 +90,10 @@ class Shelf:
     """Open one per thread."""
 
     def __init__(self, path=DB_PATH):
+        with _SETUP:
+            self._open(path)
+
+    def _open(self, path):
         self.conn, loaded = _connect(path)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
@@ -139,6 +147,11 @@ class Shelf:
         row = self.conn.execute(
             "SELECT mtime FROM files WHERE path=? AND ready=?", (path, READ)).fetchone()
         return row[0] if row else None
+
+    def state(self, path):
+        """(mtime, ready) of a file we know, or None."""
+        return self.conn.execute(
+            "SELECT mtime, ready FROM files WHERE path=?", (path,)).fetchone()
 
     def note(self, path, name, kind, mtime, added):
         """Remember a file by name right away; put() fills in the rest later."""
