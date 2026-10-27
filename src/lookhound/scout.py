@@ -159,8 +159,12 @@ class Scout(QObject):
             return
         for (path, mtime, kind, preview, payloads), vecs in zip(batch, vectors):
             waits = later is not None and "code" in payloads
+            try:
+                added = sniff.added_time(path)
+            except OSError:
+                added = None
             shelf.put(str(path), path.name, kind, mtime, preview, vecs, commit=False,
-                      ready=PARTLY if waits else READ)
+                      ready=PARTLY if waits else READ, added=added)
             if waits:
                 later.append((str(path), payloads["code"]))
         shelf.commit()
@@ -195,7 +199,8 @@ class Scout(QObject):
         # First every file by name, so the count is right and names are searchable at once.
         for n, path in enumerate(paths, 1):
             try:
-                shelf.note(str(path), path.name, sniff.kind_of(path), path.stat().st_mtime)
+                shelf.note(str(path), path.name, sniff.kind_of(path), path.stat().st_mtime,
+                           sniff.added_time(path))
             except OSError:
                 pass
             if n % 500 == 0:

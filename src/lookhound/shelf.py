@@ -110,6 +110,8 @@ class Shelf:
         )
         if "ready" not in [r[1] for r in c.execute("PRAGMA table_info(files)").fetchall()]:
             c.execute("ALTER TABLE files ADD COLUMN ready INTEGER NOT NULL DEFAULT 1")
+        if "added" not in [r[1] for r in c.execute("PRAGMA table_info(files)").fetchall()]:
+            c.execute("ALTER TABLE files ADD COLUMN added REAL")
         c.execute(
             """CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY,
@@ -138,23 +140,24 @@ class Shelf:
             "SELECT mtime FROM files WHERE path=? AND ready=?", (path, READ)).fetchone()
         return row[0] if row else None
 
-    def note(self, path, name, kind, mtime):
+    def note(self, path, name, kind, mtime, added):
         """Remember a file by name right away; put() fills in the rest later."""
         self.conn.execute(
-            "INSERT OR IGNORE INTO files (path, name, kind, mtime, ready) VALUES (?,?,?,?,?)",
-            (path, name, kind, mtime, NAME_ONLY),
+            "INSERT INTO files (path, name, kind, mtime, ready, added) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(path) DO UPDATE SET added=excluded.added WHERE added IS NULL",
+            (path, name, kind, mtime, NAME_ONLY, added),
         )
 
     def commit(self):
         self.conn.commit()
 
-    def put(self, path, name, kind, mtime, preview, vectors, commit=True, ready=READ):
+    def put(self, path, name, kind, mtime, preview, vectors, commit=True, ready=READ, added=None):
         """vectors: {space: ndarray of shape (n, dim)}"""
         c = self.conn
         self._drop(path)
         cur = c.execute(
-            "INSERT INTO files (path, name, kind, mtime, preview, ready) VALUES (?,?,?,?,?,?)",
-            (path, name, kind, mtime, preview, ready),
+            "INSERT INTO files (path, name, kind, mtime, preview, ready, added) VALUES (?,?,?,?,?,?,?)",
+            (path, name, kind, mtime, preview, ready, added),
         )
         self._add_vectors(cur.lastrowid, vectors)
         if commit:
@@ -238,10 +241,10 @@ class Shelf:
         return best
 
     def newest(self, limit=3, days=30):
-        """Files changed in the last month, newest first (apps don't count as news)."""
+        """Files added in the last month, newest first (apps don't count as news)."""
         rows = self.conn.execute(
-            "SELECT path, name, kind FROM files WHERE kind != 'app' AND mtime > ? "
-            "ORDER BY mtime DESC LIMIT ?",
+            "SELECT path, name, kind FROM files WHERE kind != 'app' AND added > ? "
+            "ORDER BY added DESC LIMIT ?",
             (time.time() - days * 86400, limit),
         ).fetchall()
         return [{"path": r[0], "name": r[1], "kind": r[2]} for r in rows]

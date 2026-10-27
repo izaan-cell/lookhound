@@ -42,6 +42,47 @@ DOC_CHUNK, DOC_CHUNKS = 1000, 6
 CODE_CHUNK = 1000  # the code model reads the opening of each file
 
 
+def _finder_date_added(path):
+    """Finder's "Date Added" (when the file landed in its folder), via getattrlist."""
+    import ctypes
+    import struct
+
+    class AttrList(ctypes.Structure):
+        _fields_ = [("bitmapcount", ctypes.c_ushort), ("reserved", ctypes.c_uint16),
+                    ("commonattr", ctypes.c_uint32), ("volattr", ctypes.c_uint32),
+                    ("dirattr", ctypes.c_uint32), ("fileattr", ctypes.c_uint32),
+                    ("forkattr", ctypes.c_uint32)]
+
+    global _libc
+    if _libc is None:
+        _libc = ctypes.CDLL(None, use_errno=True)
+    request = AttrList(5, 0, 0x10000000)  # ATTR_CMN_ADDEDTIME
+    buf = ctypes.create_string_buffer(64)
+    if _libc.getattrlist(str(path).encode(), ctypes.byref(request), buf, 64, 0) != 0:
+        return None
+    length, seconds, nanos = struct.unpack_from("<Iqq", buf.raw)
+    return seconds + nanos / 1e9 if length >= 20 and seconds > 0 else None
+
+
+_libc = None
+
+
+def added_time(path: Path):
+    """When the file arrived on this computer: created, downloaded or copied in.
+    On a Mac that's Finder's Date Added; Windows reports creation time as st_ctime."""
+    if IS_MAC:
+        try:
+            added = _finder_date_added(path)
+            if added:
+                return added
+        except Exception:
+            pass
+    st = path.stat()
+    if hasattr(st, "st_birthtime"):
+        return st.st_birthtime
+    return st.st_ctime if IS_WIN else st.st_mtime
+
+
 def kind_of(path: Path):
     ext = path.suffix.lower()
     if ext in APP_EXT:
