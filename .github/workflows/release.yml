@@ -49,7 +49,8 @@ jobs:
       # for --identity "Developer ID Application: ...".
       - name: Package (macOS)
         if: matrix.platform == 'macOS'
-        run: briefcase package macOS --adhoc-sign --no-input
+        # Package as a zip (signing happens here); the styled DMG is made below.
+        run: briefcase package macOS --adhoc-sign -p zip --no-input
 
       # Swap Briefcase's plain DMG for one with Lookhound's styled install window.
       - name: Styled DMG (macOS)
@@ -57,7 +58,7 @@ jobs:
         run: |
           python -m pip install dmgbuild
           app=$(ls -d build/lookhound/macos/app/*.app | head -1)
-          rm -f dist/Lookhound-*.dmg
+          rm -f dist/Lookhound-*.dmg dist/Lookhound-*.zip
           python packaging/make_dmg.py "$app" dist/Lookhound.dmg
 
       - name: Package (Windows)
