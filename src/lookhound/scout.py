@@ -12,7 +12,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from . import sniff
-from .brain import DIMS
+from .brain import WARM_ORDER
 from .shelf import Shelf
 
 SETTLE_SECONDS = 1.5  # wait for a file to stop changing before reading it
@@ -161,7 +161,10 @@ class Scout(QObject):
         self.count_changed.emit(shelf.count())
         self.status.emit("Settling in. The very first time takes a few minutes.")
         self.busy_changed.emit(True)
-        self.brain.warm_up(lambda name: self.status.emit(f"Settling in ({list(DIMS).index(name) + 1} of 3)…"))
+        self.brain.warm_up(
+            lambda name: self.status.emit(f"Settling in ({WARM_ORDER.index(name) + 1} of 3)…"),
+            lambda name: self.status.emit("The internet is being slow. I'll keep trying…"),
+        )
         self._watch()
         self._full_scan(shelf)
         while not self._stop.is_set():

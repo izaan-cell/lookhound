@@ -33,13 +33,22 @@ class Hunter:
         self.shelf = Shelf()
 
     def search(self, text="", image=None, kinds=None, limit=60):
+        """Returns (results, still_waking). Models that haven't finished loading
+        are skipped rather than waited for, so a search never hangs."""
+        with self.brain.urgent():
+            return self._search(text, image, kinds, limit)
+
+    def _search(self, text, image, kinds, limit):
         scores = {}
+        waking = False
 
         def merge(found, lo, hi):
             for fid, sim in found.items():
                 scores[fid] = max(scores.get(fid, 0.0), _stretch(sim, lo, hi))
 
-        if image is not None:
+        if image is not None and not self.brain.ready("clip"):
+            waking = True
+        elif image is not None:
             vec = self.brain.embed_one("clip", image)
             merge(self.shelf.nearest("clip", vec), *IMAGE_QUERY_SCALE["clip"])
         text = text.strip()
@@ -49,6 +58,8 @@ class Hunter:
                 spaces.remove("code")
             if kinds and not kinds & {"image", "app"}:
                 spaces.remove("clip")
+            waking = waking or not all(self.brain.ready(s) for s in spaces)
+            spaces = [s for s in spaces if self.brain.ready(s)]
             for space in spaces:
                 vec = self.brain.embed_one(space, text)
                 merge(self.shelf.nearest(space, vec), *TEXT_QUERY_SCALE[space])
@@ -70,4 +81,4 @@ class Hunter:
             # Drop stragglers that trail far behind the best match.
             floor = results[0]["score"] * RELATIVE_FLOOR
             results = [r for r in results if r["score"] >= floor]
-        return results[:limit]
+        return results[:limit], waking

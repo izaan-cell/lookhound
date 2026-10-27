@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QFileInfo, QObject, QSize, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (
     QAbstractFileIconProvider, QFont, QFontDatabase, QIcon, QPainter,
     QPainterPath, QPixmap,
@@ -68,6 +69,12 @@ def stylesheet(c):
     }}
     QPushButton#go:hover {{ background: {c['accent']}; }}
     QPushButton#quiet {{ margin: 0; }}
+    QPushButton#plus {{
+        margin: 0; padding: 0; min-width: 48px; max-width: 48px; min-height: 48px; max-height: 48px;
+        background: {c['field']}; border: 1px solid {c['line']}; border-radius: 8px;
+        color: {c['ink']}; font-size: 24px; font-weight: 300;
+    }}
+    QPushButton#plus:hover {{ border-color: {c['accent']}; color: {c['accent']}; }}
     QListWidget {{ background: transparent; border: none; outline: none; }}
     QListWidget::item, QListWidget::item:selected, QListWidget::item:hover {{
         background: transparent; border: none;
@@ -97,6 +104,8 @@ def stylesheet(c):
 
 
 RECENT_KEEP = 6
+WAKING = ("Still fetching what I need to understand your files.\n"
+          "The first time takes a few minutes; I'll search again by myself the moment I'm ready.")
 NOTHING_FOUND = ("I couldn't find that one.\n"
                  "Try describing it another way, or check Folders to make sure I'm looking there.")
 
@@ -183,6 +192,15 @@ def search_field(placeholder):
     return field
 
 
+def plus_button(on_click):
+    plus = QPushButton("+")
+    plus.setObjectName("plus")
+    plus.setCursor(Qt.CursorShape.PointingHandCursor)
+    plus.setToolTip("Pick a picture to find ones like it")
+    plus.clicked.connect(on_click)
+    return plus
+
+
 class IconMaker(QObject):
     """App icons come from Qt's icon provider, which only works on the GUI thread.
     The indexer asks through a signal and waits for the answer."""
@@ -219,7 +237,7 @@ class IconMaker(QObject):
 class Searcher(QObject):
     """Runs searches off the GUI thread; only the newest query matters."""
 
-    results = Signal(list, int)
+    results = Signal(list, int, bool)
 
     def __init__(self, brain):
         super().__init__()
@@ -238,11 +256,11 @@ class Searcher(QObject):
                 job = self._q.get()
             ticket, text, image, kinds = job
             try:
-                found = hunter.search(text, image, kinds)
+                found, waking = hunter.search(text, image, kinds)
             except Exception as exc:
                 print(f"[lookhound] search failed: {exc}")
-                found = []
-            self.results.emit(found, ticket)
+                found, waking = [], False
+            self.results.emit(found, ticket, waking)
 
 
 class ResultCard(QWidget):
@@ -373,6 +391,9 @@ class Window(QMainWindow):
             lambda: self.pages.currentIndex() == 0 and self._refresh_home())
         self.scout.count_changed.connect(lambda _: self.home_timer.start())
         self.searcher.results.connect(self._show_results)
+        # While the models are still arriving, quietly search again until they're in.
+        self.retry = QTimer(self, singleShot=True, interval=4000)
+        self.retry.timeout.connect(lambda: self._search(quiet=True))
         self.update_found.connect(self._show_update)
         self.debounce = QTimer(self, singleShot=True, interval=280)
         self.debounce.timeout.connect(self._search)
@@ -476,11 +497,12 @@ class Window(QMainWindow):
         go.setObjectName("go")
         go.setCursor(Qt.CursorShape.PointingHandCursor)
         go.clicked.connect(self._go)
+        row.addWidget(plus_button(self._pick_image))
         row.addWidget(self.home_query, 1)
         row.addWidget(go)
         col.addLayout(row)
 
-        hint = QLabel("Drop an image anywhere on this window to find ones like it.")
+        hint = QLabel("Press + or drop a picture on this window to find ones like it.")
         hint.setObjectName("hint")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(hint)
@@ -532,6 +554,7 @@ class Window(QMainWindow):
             badge.setPixmap(badge_pix)
         badge.setToolTip("Lookhound")
         bar.addWidget(badge)
+        bar.addWidget(plus_button(self._pick_image))
         self.query = search_field("Describe what you're looking for…")
         bar.addWidget(self.query, 1)
 
@@ -692,7 +715,8 @@ class Window(QMainWindow):
                 btn.setChecked(True)
                 self.kinds = FILTERS.get(key)
 
-    def _search(self):
+    def _search(self, quiet=False):
+        self.retry.stop()
         if self.pages.currentIndex() != 1:
             return
         text = self.query.text()
@@ -701,16 +725,19 @@ class Window(QMainWindow):
             self._say("Tell me what you're after, and I'll go and look.")
             return
         self.ticket += 1
-        self._say("Looking…")
+        if not quiet:
+            self._say("Looking…")
         self.searcher.ask(self.ticket, text, self.image, self.kinds)
 
-    @Slot(list, int)
-    def _show_results(self, results, ticket):
+    @Slot(list, int, bool)
+    def _show_results(self, results, ticket, waking):
         if ticket != self.ticket:
             return
+        if waking:
+            self.retry.start()
         self.list.clear()
         if not results:
-            self._say(NOTHING_FOUND)
+            self._say(WAKING if waking else NOTHING_FOUND)
             return
         self.empty.hide()
         self.list.show()
@@ -740,19 +767,30 @@ class Window(QMainWindow):
     def dropEvent(self, event):
         mime = event.mimeData()
         path = self._image_from_drop(mime)
-        if path and path.suffix.lower() == ".app":
-            path = self.icons.icon_for(path)
+        if not path and mime.hasImage():
+            path = ICON_CACHE / "dropped.png"
+            mime.imageData().save(str(path))
         if path:
+            self._use_image(path)
+
+    def _pick_image(self):
+        patterns = " ".join("*" + ext for ext in sorted(IMAGE_EXT))
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Find pictures like this one", str(Path.home() / "Pictures"),
+            f"Pictures ({patterns})")
+        if path:
+            self._use_image(Path(path))
+
+    def _use_image(self, path):
+        if path.suffix.lower() == ".app":
+            path = self.icons.icon_for(path)
+            if not path:
+                return
+        try:
             image = Image.open(path).convert("RGB")
-            pix = QPixmap(str(path))
-        elif mime.hasImage():
-            qimg = mime.imageData()
-            tmp = ICON_CACHE / "dropped.png"
-            qimg.save(str(tmp))
-            image = Image.open(tmp).convert("RGB")
-            pix = QPixmap.fromImage(qimg)
-        else:
+        except Exception:
             return
+        pix = QPixmap(str(path))
         self.image = image
         self.image_thumb.setPixmap(rounded(pix, 40, 12))
         self.image_chip.show()
@@ -817,6 +855,20 @@ def main():
     icon = RESOURCES / "lookhound.png"
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
+    # One Lookhound at a time: opening it again just brings this window forward.
+    name = "dev.lookhound.window"
+    probe = QLocalSocket()
+    probe.connectToServer(name)
+    if probe.waitForConnected(300):
+        probe.write(b"show")
+        probe.waitForBytesWritten(300)
+        return
+    QLocalServer.removeServer(name)  # left over from a crash
+    server = QLocalServer()
+    server.listen(name)
     window = Window()
+    server.newConnection.connect(lambda: (
+        server.nextPendingConnection(), window.showNormal(), window.raise_(),
+        window.activateWindow()))
     window.show()
     sys.exit(app.exec())
