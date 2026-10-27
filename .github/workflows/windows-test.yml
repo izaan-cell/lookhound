@@ -1,0 +1,75 @@
+name: Windows test
+
+# Installs the latest released Lookhound.msi on a clean Windows machine, runs
+# packaging/smoke_test.py inside the installed app, then uninstalls it.
+# Runs after every release, or by hand from the Actions tab.
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      LOOKHOUND_HOME: ${{ runner.temp }}\lookhound-home
+      SMOKE_OUT: ${{ runner.temp }}\smoke
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download the latest installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern Lookhound.msi --dir dist
+          gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+
+      - name: Install
+        run: |
+          $p = Start-Process msiexec -ArgumentList '/i', 'dist\Lookhound.msi', '/qn', '/l*v', 'install.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Install failed with code $($p.ExitCode)" }
+          $exe = Get-ChildItem -Path $env:ProgramFiles, ${env:ProgramFiles(x86)}, "$env:LOCALAPPDATA\Programs" `
+            -Filter Lookhound.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw "Installed, but Lookhound.exe is nowhere to be found" }
+          Write-Host "Installed at $($exe.FullName)"
+          "LOOKHOUND_EXE=$($exe.FullName)" >> $env:GITHUB_ENV
+
+      - name: Run the smoke test
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'packaging\smoke_test.py'
+          $code = "exec(open(r'$script').read())"
+          $p = Start-Process $env:LOOKHOUND_EXE -ArgumentList '-c', "`"$code`"" -PassThru
+          if (-not $p.WaitForExit(40 * 60 * 1000)) { $p.Kill(); throw "The smoke test never finished" }
+          $report = Join-Path $env:SMOKE_OUT 'report.json'
+          if (-not (Test-Path $report)) { throw "No report: the app didn't run the test (exit code $($p.ExitCode))" }
+          $r = Get-Content $report -Raw | ConvertFrom-Json
+          foreach ($s in $r.steps) { Write-Host ("{0}  {1}  {2}" -f ($(if ($s.ok) { 'PASS' } else { 'FAIL' })), $s.step, $s.detail) }
+          if (-not $r.passed) { throw "Smoke test failed" }
+
+      - name: Uninstall
+        if: always()
+        run: |
+          if (-not $env:LOOKHOUND_EXE) { exit 0 }
+          $p = Start-Process msiexec -ArgumentList '/x', 'dist\Lookhound.msi', '/qn' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Uninstall failed with code $($p.ExitCode)" }
+          if (Test-Path $env:LOOKHOUND_EXE) { throw "Uninstalled, but Lookhound.exe is still there" }
+          Write-Host "Uninstalled cleanly"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test
+          path: |
+            ${{ runner.temp }}\smoke\*.png
+            ${{ runner.temp }}\smoke\report.json
+            install.log
