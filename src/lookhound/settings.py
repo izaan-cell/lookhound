@@ -6,7 +6,7 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 # Where the updater looks for new releases.
 UPDATE_REPO = "izaan-cell/lookhound"

@@ -13,9 +13,10 @@ from watchdog.observers import Observer
 
 from . import sniff
 from .brain import WARM_ORDER
-from .shelf import Shelf
+from .shelf import PARTLY, READ, Shelf
 
 SETTLE_SECONDS = 1.5  # wait for a file to stop changing before reading it
+BATCH = 32  # files read and embedded together; the models are much faster in bulk
 
 
 class _Relay(FileSystemEventHandler):
@@ -111,38 +112,117 @@ class Scout(QObject):
     def _inside_folders(self, path):
         return any(path == f or f in path.parents for f in self.folders)
 
-    def _index(self, shelf, path):
+    def _prepare(self, shelf, path):
+        """What the models need from one file, or None if there's nothing to do."""
         try:
             if not path.exists() or not self._inside_folders(path):
                 shelf.remove(str(path))
-                return
+                return None
             if path.is_dir() and sniff.kind_of(path) != "app":
-                return
+                return None
             mtime = path.stat().st_mtime
             if shelf.mtime_of(str(path)) == mtime:
-                return
+                return None
             found = sniff.sniff(path, self.icon_for)
             if not found:
-                return
-            kind, preview, payloads = found
-            vectors = {space: self.brain.embed(space, items) for space, items in payloads.items()}
-            shelf.put(str(path), path.name, kind, mtime, preview, vectors)
+                return None
+            return (path, mtime) + found
         except Exception as exc:  # one unreadable file shouldn't stop the rest
             print(f"[lookhound] skipped {path}: {exc}")
+            return None
 
-    def _full_scan(self, shelf):
+    def _flush(self, shelf, batch, later=None):
+        """Embed a batch of prepared files together, one model call per space.
+        With `later`, the slow code model is skipped and its work queued there."""
+        if not batch:
+            return
+        try:
+            vectors = [{} for _ in batch]
+            spaces = {space for *_, payloads in batch for space in payloads}
+            if later is not None:
+                spaces.discard("code")
+            for space in spaces:
+                items, owners = [], []
+                for i, (*_, payloads) in enumerate(batch):
+                    for item in payloads.get(space, []):
+                        items.append(item)
+                        owners.append(i)
+                embedded = self.brain.embed(space, items)
+                for i in set(owners):
+                    vectors[i][space] = embedded[[n for n, o in enumerate(owners) if o == i]]
+        except Exception:
+            if len(batch) > 1:  # find the one file that broke it
+                for one in batch:
+                    self._flush(shelf, [one], later)
+                return
+            print(f"[lookhound] skipped {batch[0][0]}")
+            return
+        for (path, mtime, kind, preview, payloads), vecs in zip(batch, vectors):
+            waits = later is not None and "code" in payloads
+            shelf.put(str(path), path.name, kind, mtime, preview, vecs, commit=False,
+                      ready=PARTLY if waits else READ)
+            if waits:
+                later.append((str(path), payloads["code"]))
+        shelf.commit()
+
+    def _read_code(self, shelf, later):
+        """The code model's pass: slower, so it runs once everything is searchable."""
+        for start in range(0, len(later), BATCH):
+            if self._stop.is_set():
+                return
+            batch = later[start:start + BATCH]
+            self.status.emit(f"Reading your code more closely… {start:,} of {len(later):,}")
+            items = [item for _, code in batch for item in code]
+            try:
+                embedded = self.brain.embed("code", items)
+            except Exception as exc:
+                print(f"[lookhound] code pass skipped a batch: {exc}")
+                continue
+            at = 0
+            for path, code in batch:
+                shelf.finish(path, {"code": embedded[at:at + len(code)]})
+                at += len(code)
+            shelf.commit()
+
+    def _index(self, shelf, path):
+        self._flush(shelf, [p for p in [self._prepare(shelf, path)] if p])
+
+    def _survey(self, shelf):
+        """Find every file and note it by name. Takes seconds, needs no models."""
         self.busy_changed.emit(True)
-        self.status.emit("Getting to know your files…")
-        on_disk = set()
-        for n, path in enumerate(self._walk(), 1):
-            on_disk.add(str(path))
-            self._index(shelf, path)
-            if n % 25 == 0:
-                self.status.emit(f"Getting to know your files… {n:,} so far")
+        self.status.emit("Looking around your folders…")
+        paths = list(self._walk())
+        # First every file by name, so the count is right and names are searchable at once.
+        for n, path in enumerate(paths, 1):
+            try:
+                shelf.note(str(path), path.name, sniff.kind_of(path), path.stat().st_mtime)
+            except OSError:
+                pass
+            if n % 500 == 0:
+                shelf.commit()
                 self.count_changed.emit(shelf.count())
+        shelf.commit()
+        self.count_changed.emit(shelf.count())
+        on_disk = {str(p) for p in paths}
         for stale in set(shelf.all_paths()) - on_disk:
             shelf.remove(stale)
+        return paths
+
+    def _read_all(self, shelf, paths):
+        """Read every file properly, a batch at a time."""
+        self.busy_changed.emit(True)
+        total = len(paths)
+        batch, later = [], []
+        for n, path in enumerate(paths, 1):
+            prepared = self._prepare(shelf, path)
+            if prepared:
+                batch.append(prepared)
+            if len(batch) >= BATCH or n == total:
+                self._flush(shelf, batch, later)
+                batch = []
+                self.status.emit(f"Getting to know your files… {n:,} of {total:,}")
         self.count_changed.emit(shelf.count())
+        self._read_code(shelf, later)
         self.status.emit("All tucked in. I'll keep watch over your folders.")
         self.busy_changed.emit(False)
 
@@ -159,19 +239,19 @@ class Scout(QObject):
     def _run(self):
         shelf = Shelf()
         self.count_changed.emit(shelf.count())
+        paths = self._survey(shelf)
         self.status.emit("Settling in. The very first time takes a few minutes.")
-        self.busy_changed.emit(True)
         self.brain.warm_up(
             lambda name: self.status.emit(f"Settling in ({WARM_ORDER.index(name) + 1} of 3)…"),
             lambda name: self.status.emit("The internet is being slow. I'll keep trying…"),
         )
         self._watch()
-        self._full_scan(shelf)
+        self._read_all(shelf, paths)
         while not self._stop.is_set():
             action, path = self._jobs.get()
             if action == "rescan":
                 self._watch()
-                self._full_scan(shelf)
+                self._read_all(shelf, self._survey(shelf))
             else:
                 self._index(shelf, path)
                 self.count_changed.emit(shelf.count())

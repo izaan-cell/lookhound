@@ -27,7 +27,10 @@ from .hunt import FILTERS, Hunter
 from .scout import Scout
 from .shelf import Shelf
 from .settings import ICON_CACHE, IS_MAC, IS_WIN, load_prefs, save_prefs
-from .sniff import IMAGE_EXT
+from .sniff import APP_EXT, CODE_EXT, DOC_EXT, IMAGE_EXT, sniff
+
+LOOKALIKE_EXT = IMAGE_EXT | APP_EXT | {".icns"}  # searched by how they look
+PICKABLE_EXT = LOOKALIKE_EXT | DOC_EXT | CODE_EXT  # what + and drops accept
 
 RESOURCES = Path(__file__).parent / "resources"
 
@@ -79,6 +82,7 @@ def stylesheet(c):
     QListWidget::item, QListWidget::item:selected, QListWidget::item:hover {{
         background: transparent; border: none;
     }}
+    QLabel#asked {{ font-family: "{SERIF}"; font-size: 30px; }}
     QLabel#empty {{ color: {c['muted']}; font-family: "{SERIF}"; font-size: 24px; }}
     QWidget#divider {{ background: {c['line']}; }}
     QWidget#banner {{ background: {c['card']}; border: 1px solid {c['line']}; border-radius: 8px; }}
@@ -196,7 +200,7 @@ def plus_button(on_click):
     plus = QPushButton("+")
     plus.setObjectName("plus")
     plus.setCursor(Qt.CursorShape.PointingHandCursor)
-    plus.setToolTip("Pick a picture to find ones like it")
+    plus.setToolTip("Pick a picture, app, PDF or slides to find ones like it")
     plus.clicked.connect(on_click)
     return plus
 
@@ -245,8 +249,8 @@ class Searcher(QObject):
         self._q = queue.Queue()
         threading.Thread(target=self._run, daemon=True, name="search").start()
 
-    def ask(self, ticket, text, image, kinds):
-        self._q.put((ticket, text, image, kinds))
+    def ask(self, ticket, text, image, kinds, like=None):
+        self._q.put((ticket, text, image, kinds, like))
 
     def _run(self):
         hunter = Hunter(self.brain)
@@ -254,9 +258,9 @@ class Searcher(QObject):
             job = self._q.get()
             while not self._q.empty():  # skip queries the user already typed past
                 job = self._q.get()
-            ticket, text, image, kinds = job
+            ticket, text, image, kinds, like = job
             try:
-                found, waking = hunter.search(text, image, kinds)
+                found, waking = hunter.search(text, image, kinds, like=like)
             except Exception as exc:
                 print(f"[lookhound] search failed: {exc}")
                 found, waking = [], False
@@ -379,7 +383,9 @@ class Window(QMainWindow):
         self.scout = Scout(self.brain, self.prefs["folders"], self.icons.icon_for)
         self.searcher = Searcher(self.brain)
         self.ticket = 0
+        self.query_text = ""
         self.image = None
+        self.like = None  # (path, payloads) when searching for files like a document
         self.kinds = None
 
         self._build()
@@ -395,9 +401,6 @@ class Window(QMainWindow):
         self.retry = QTimer(self, singleShot=True, interval=4000)
         self.retry.timeout.connect(lambda: self._search(quiet=True))
         self.update_found.connect(self._show_update)
-        self.debounce = QTimer(self, singleShot=True, interval=280)
-        self.debounce.timeout.connect(self._search)
-        self.query.textChanged.connect(lambda: self.debounce.start())
 
         self._restore_filter()
         self._refresh_home()
@@ -502,7 +505,7 @@ class Window(QMainWindow):
         row.addWidget(go)
         col.addLayout(row)
 
-        hint = QLabel("Press + or drop a picture on this window to find ones like it.")
+        hint = QLabel("Press + or drop a file here: a picture, an app, a PDF or slides. I'll find ones like it.")
         hint.setObjectName("hint")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         col.addWidget(hint)
@@ -535,45 +538,49 @@ class Window(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(12)
 
+        # Back on the left, the dog in the middle, an equal blank on the right
+        # so the dog sits truly centred.
         bar = QHBoxLayout()
-        bar.setSpacing(10)
+        bar.setContentsMargins(0, 4, 0, 0)
         back = QPushButton("←  Back")
         back.setObjectName("quiet")
         back.setStyleSheet("color: palette(text);")
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._home)
-        bar.addWidget(back)
+        back.setFixedWidth(back.sizeHint().width())
         badge = QLabel()
         badge_pix = QPixmap(str(RESOURCES / "lookhound-128.png"))
         if not badge_pix.isNull():
             ratio = self.devicePixelRatioF()
-            badge_pix = badge_pix.scaled(int(40 * ratio), int(40 * ratio),
+            badge_pix = badge_pix.scaled(int(44 * ratio), int(44 * ratio),
                                          Qt.AspectRatioMode.KeepAspectRatio,
                                          Qt.TransformationMode.SmoothTransformation)
             badge_pix.setDevicePixelRatio(ratio)
             badge.setPixmap(badge_pix)
         badge.setToolTip("Lookhound")
-        bar.addWidget(badge)
-        bar.addWidget(plus_button(self._pick_image))
-        self.query = search_field("Describe what you're looking for…")
-        bar.addWidget(self.query, 1)
-
-        self.image_chip = QWidget()
-        self.image_chip.setObjectName("imagechip")
-        self.image_chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        chip = QHBoxLayout(self.image_chip)
-        chip.setContentsMargins(6, 6, 4, 6)
-        self.image_thumb = QLabel()
-        self.image_thumb.setFixedSize(40, 40)
-        clear = QPushButton("✕")
-        clear.setObjectName("quiet")
-        clear.setToolTip("Forget this picture")
-        clear.clicked.connect(self._clear_image)
-        chip.addWidget(self.image_thumb)
-        chip.addWidget(clear)
-        self.image_chip.hide()
-        bar.addWidget(self.image_chip)
+        balance = QWidget()
+        balance.setFixedWidth(back.width())
+        bar.addWidget(back, 0, Qt.AlignmentFlag.AlignVCenter)
+        bar.addStretch()
+        bar.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        bar.addStretch()
+        bar.addWidget(balance)
         lay.addLayout(bar)
+
+        # What you asked for, as a title rather than another search box.
+        asked = QHBoxLayout()
+        asked.setSpacing(12)
+        asked.addStretch()
+        self.asked_thumb = QLabel()
+        self.asked_thumb.setFixedSize(40, 40)
+        self.asked_thumb.hide()
+        self.asked = QLabel()
+        self.asked.setObjectName("asked")
+        asked.addWidget(self.asked_thumb, 0, Qt.AlignmentFlag.AlignVCenter)
+        asked.addWidget(self.asked, 0, Qt.AlignmentFlag.AlignVCenter)
+        asked.addStretch()
+        lay.addLayout(asked)
+        lay.addSpacing(4)
 
         chips = QHBoxLayout()
         chips.setSpacing(8)
@@ -587,6 +594,7 @@ class Window(QMainWindow):
             btn.setProperty("key", key)
             self.chip_group.addButton(btn)
             chips.addWidget(btn)
+        chips.insertStretch(0)
         chips.addStretch()
         lay.addLayout(chips)
 
@@ -609,20 +617,27 @@ class Window(QMainWindow):
 
     def _go(self):
         text = self.home_query.text().strip()
-        if not text and self.image is None:
+        if not text and self.image is None and self.like is None:
             return
         if text:
             self._remember(text)
-        self.query.blockSignals(True)
-        self.query.setText(text)
-        self.query.blockSignals(False)
+        self.query_text = text
+        if text:
+            title = f"“{text}”"
+        elif self.like:
+            title = f"Files like {self.like[0].name}"
+        else:
+            title = "Things that look like this"
+        metrics = self.asked.fontMetrics()
+        self.asked.setText(metrics.elidedText(title, Qt.TextElideMode.ElideRight, 560))
+        self.asked.setToolTip(title)
         self.pages.setCurrentIndex(1)
-        self.query.setFocus()
         self._search()
 
     def _home(self):
         self.image = None
-        self.image_chip.hide()
+        self.like = None
+        self.asked_thumb.hide()
         self.home_query.clear()
         self.list.clear()
         self.pages.setCurrentIndex(0)
@@ -719,15 +734,11 @@ class Window(QMainWindow):
         self.retry.stop()
         if self.pages.currentIndex() != 1:
             return
-        text = self.query.text()
-        if not text.strip() and self.image is None:
-            self.list.clear()
-            self._say("Tell me what you're after, and I'll go and look.")
-            return
+        text = self.query_text
         self.ticket += 1
         if not quiet:
             self._say("Looking…")
-        self.searcher.ask(self.ticket, text, self.image, self.kinds)
+        self.searcher.ask(self.ticket, text, self.image, self.kinds, self.like)
 
     @Slot(list, int, bool)
     def _show_results(self, results, ticket, waking):
@@ -756,7 +767,7 @@ class Window(QMainWindow):
     def _image_from_drop(self, mime):
         for url in mime.urls():
             path = Path(url.toLocalFile())
-            if path.suffix.lower() in IMAGE_EXT or path.suffix.lower() in (".app", ".icns"):
+            if path.suffix.lower() in PICKABLE_EXT:
                 return path
         return None
 
@@ -771,18 +782,46 @@ class Window(QMainWindow):
             path = ICON_CACHE / "dropped.png"
             mime.imageData().save(str(path))
         if path:
-            self._use_image(path)
+            self._use_file(path)
 
     def _pick_image(self):
-        patterns = " ".join("*" + ext for ext in sorted(IMAGE_EXT))
+        def globs(exts):
+            return " ".join("*" + ext for ext in sorted(exts))
+        filters = ";;".join([
+            f"Anything I know ({globs(PICKABLE_EXT)})",
+            f"Pictures ({globs(IMAGE_EXT)})",
+            f"Apps ({globs(APP_EXT)})",
+            f"Writing ({globs(DOC_EXT)})",
+            f"Code ({globs(CODE_EXT)})",
+        ])
         path, _ = QFileDialog.getOpenFileName(
-            self, "Find pictures like this one", str(Path.home() / "Pictures"),
-            f"Pictures ({patterns})")
+            self, "Find things like this", str(Path.home()), filters)
         if path:
-            self._use_image(Path(path))
+            self._use_file(Path(path))
+
+    def _use_file(self, path):
+        if path.suffix.lower() in LOOKALIKE_EXT:
+            self._use_image(path)
+            return
+        try:
+            found = sniff(path)
+        except Exception:
+            found = None
+        if not found:
+            return
+        payloads = {space: items[:1] for space, items in found[2].items() if space != "clip"}
+        icon = self.icons.provider.icon(QFileInfo(str(path))).pixmap(QSize(80, 80))
+        self.image = None
+        self.like = (path, payloads)
+        self._show_thumb(icon)
+        self._go()
+
+    def _show_thumb(self, pix):
+        self.asked_thumb.setPixmap(rounded(pix, 40, 12))
+        self.asked_thumb.show()
 
     def _use_image(self, path):
-        if path.suffix.lower() == ".app":
+        if path.suffix.lower() in APP_EXT:
             path = self.icons.icon_for(path)
             if not path:
                 return
@@ -790,19 +829,10 @@ class Window(QMainWindow):
             image = Image.open(path).convert("RGB")
         except Exception:
             return
-        pix = QPixmap(str(path))
         self.image = image
-        self.image_thumb.setPixmap(rounded(pix, 40, 12))
-        self.image_chip.show()
-        if self.pages.currentIndex() == 0:
-            self._go()
-        else:
-            self._search()
-
-    def _clear_image(self):
-        self.image = None
-        self.image_chip.hide()
-        self._search()
+        self.like = None
+        self._show_thumb(QPixmap(str(path)))
+        self._go()
 
     # ---- folders and updates ---------------------------------------------
 

@@ -16,13 +16,15 @@ except ImportError:
     HEIC = set()
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico"} | HEIC
-DOC_EXT = {".pdf", ".docx", ".txt", ".md", ".markdown", ".rtf", ".csv", ".html", ".htm"}
+DOC_EXT = {".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".rtf", ".csv", ".html", ".htm"}
 CODE_EXT = {
     ".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".java", ".kt", ".swift", ".c", ".h",
     ".cpp", ".hpp", ".cc", ".cs", ".go", ".rs", ".rb", ".php", ".m", ".sh", ".zsh",
     ".ps1", ".bat", ".sql", ".lua", ".dart", ".scala", ".vue", ".svelte", ".css",
     ".scss", ".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".r", ".jl", ".ex",
 }
+# Settings and data files: worth finding by name and gist, not worth the code model.
+DATA_EXT = {".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".css", ".scss"}
 APP_EXT = {".app"} if IS_MAC else ({".lnk", ".exe"} if IS_WIN else set())
 
 SKIP_DIRS = {
@@ -37,7 +39,7 @@ SKIP_BUNDLE_EXT = {
 
 MAX_BYTES = 60 * 1024 * 1024
 DOC_CHUNK, DOC_CHUNKS = 1000, 6
-CODE_CHUNK, CODE_CHUNKS = 1600, 4
+CODE_CHUNK = 1000  # the code model reads the opening of each file
 
 
 def kind_of(path: Path):
@@ -83,6 +85,15 @@ def _read_text(path: Path):
         import docx
 
         return "\n".join(p.text for p in docx.Document(str(path)).paragraphs)
+    if ext == ".pptx":
+        from pptx import Presentation
+
+        lines = []
+        for slide in Presentation(str(path)).slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    lines.append(shape.text_frame.text)
+        return "\n".join(lines)
     raw = path.read_text(errors="ignore")[: DOC_CHUNK * DOC_CHUNKS * 2]
     if ext in {".html", ".htm"}:
         raw = re.sub(r"<(script|style).*?</\1>|<[^>]+>", " ", raw, flags=re.S | re.I)
@@ -129,6 +140,8 @@ def sniff(path: Path, icon_for=None):
     if kind == "document":
         chunks = _chunks(f"{name}\n{text}", DOC_CHUNK, DOC_CHUNKS)
         return kind, text.strip()[:300], {"text": chunks}
-    chunks = _chunks(f"# {path.name}\n{text}", CODE_CHUNK, CODE_CHUNKS)
     snippet = "\n".join(text.strip().splitlines()[:8])
-    return kind, snippet, {"code": chunks, "text": [name]}
+    head = _chunks(f"# {path.name}\n{text}", CODE_CHUNK, 1)
+    if path.suffix.lower() in DATA_EXT:
+        return kind, snippet, {"text": head}
+    return kind, snippet, {"code": head, "text": [name] + head}

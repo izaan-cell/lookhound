@@ -1,6 +1,6 @@
 [project]
 name = "lookhound"
-version = "0.1.5"
+version = "0.1.6"
 description = "Find any file on your computer by describing it. Fully local."
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -17,13 +17,14 @@ dependencies = [
     "watchdog>=4",
     "pypdf>=4",
     "python-docx>=1.1",
+    "python-pptx>=1.0",
     "platformdirs>=4",
 ]
 
 [tool.briefcase]
 project_name = "Lookhound"
 bundle = "dev.lookhound"
-version = "0.1.5"
+version = "0.1.6"
 url = "https://github.com/izaan-cell/lookhound"
 license.file = "LICENSE"
 author = "Izaan Hussain"
@@ -48,6 +49,7 @@ requires = [
     "watchdog>=4",
     "pypdf>=4",
     "python-docx>=1.1",
+    "python-pptx>=1.0",
     "platformdirs>=4",
 ]
 

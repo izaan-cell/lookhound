@@ -2,6 +2,7 @@
 tables. If the sqlite-vec extension can't load, vectors go in plain BLOB tables
 and are compared with numpy instead: slower, but the same answers."""
 import sqlite3
+import time
 
 import numpy as np
 
@@ -9,6 +10,8 @@ from .brain import DIMS
 from .settings import DB_PATH
 
 SPACES = tuple(DIMS)
+# files.ready: 0 = known by name only, 1 = fully read, 2 = read but waiting on the code model.
+NAME_ONLY, READ, PARTLY = 0, 1, 2
 
 
 def _try_load_vec(conn):
@@ -105,6 +108,8 @@ class Shelf:
                 preview TEXT
             )"""
         )
+        if "ready" not in [r[1] for r in c.execute("PRAGMA table_info(files)").fetchall()]:
+            c.execute("ALTER TABLE files ADD COLUMN ready INTEGER NOT NULL DEFAULT 1")
         c.execute(
             """CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY,
@@ -129,18 +134,42 @@ class Shelf:
     # ---- writing -------------------------------------------------------
 
     def mtime_of(self, path):
-        row = self.conn.execute("SELECT mtime FROM files WHERE path=?", (path,)).fetchone()
+        row = self.conn.execute(
+            "SELECT mtime FROM files WHERE path=? AND ready=?", (path, READ)).fetchone()
         return row[0] if row else None
 
-    def put(self, path, name, kind, mtime, preview, vectors):
+    def note(self, path, name, kind, mtime):
+        """Remember a file by name right away; put() fills in the rest later."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO files (path, name, kind, mtime, ready) VALUES (?,?,?,?,?)",
+            (path, name, kind, mtime, NAME_ONLY),
+        )
+
+    def commit(self):
+        self.conn.commit()
+
+    def put(self, path, name, kind, mtime, preview, vectors, commit=True, ready=READ):
         """vectors: {space: ndarray of shape (n, dim)}"""
         c = self.conn
         self._drop(path)
         cur = c.execute(
-            "INSERT INTO files (path, name, kind, mtime, preview) VALUES (?,?,?,?,?)",
-            (path, name, kind, mtime, preview),
+            "INSERT INTO files (path, name, kind, mtime, preview, ready) VALUES (?,?,?,?,?,?)",
+            (path, name, kind, mtime, preview, ready),
         )
-        file_id = cur.lastrowid
+        self._add_vectors(cur.lastrowid, vectors)
+        if commit:
+            c.commit()
+
+    def finish(self, path, vectors):
+        """Add the vectors a partly read file was waiting for."""
+        row = self.conn.execute(
+            "SELECT id FROM files WHERE path=? AND ready=?", (path, PARTLY)).fetchone()
+        if row:
+            self._add_vectors(row[0], vectors)
+            self.conn.execute("UPDATE files SET ready=? WHERE id=?", (READ, row[0]))
+
+    def _add_vectors(self, file_id, vectors):
+        c = self.conn
         for space, rows in vectors.items():
             for vec in rows:
                 chunk_id = c.execute(
@@ -150,7 +179,6 @@ class Shelf:
                     f"INSERT INTO vec_{space} (rowid, embedding) VALUES (?,?)",
                     (chunk_id, np.asarray(vec, dtype=np.float32).tobytes()),
                 )
-        c.commit()
 
     def _drop(self, path):
         c = self.conn
@@ -209,12 +237,12 @@ class Shelf:
                 best[fid] = sim
         return best
 
-    def newest(self, limit=3):
-        """The most recently changed files (apps don't count as news)."""
+    def newest(self, limit=3, days=30):
+        """Files changed in the last month, newest first (apps don't count as news)."""
         rows = self.conn.execute(
-            "SELECT path, name, kind FROM files WHERE kind != 'app' "
+            "SELECT path, name, kind FROM files WHERE kind != 'app' AND mtime > ? "
             "ORDER BY mtime DESC LIMIT ?",
-            (limit,),
+            (time.time() - days * 86400, limit),
         ).fetchall()
         return [{"path": r[0], "name": r[1], "kind": r[2]} for r in rows]
 

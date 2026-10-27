@@ -8,6 +8,8 @@ from .shelf import Shelf
 # (floor, ceiling) of "meaningful" similarity per space, measured by hand.
 TEXT_QUERY_SCALE = {"clip": (0.21, 0.33), "text": (0.15, 0.70), "code": (0.25, 0.75)}
 IMAGE_QUERY_SCALE = {"clip": (0.55, 0.95)}
+# A whole document compared with other documents scores much higher than a short query.
+LIKE_SCALE = {"text": (0.35, 0.90), "code": (0.45, 0.95)}
 
 FILTERS = {
     "all": None,
@@ -32,13 +34,13 @@ class Hunter:
         self.brain = brain
         self.shelf = Shelf()
 
-    def search(self, text="", image=None, kinds=None, limit=60):
+    def search(self, text="", image=None, kinds=None, limit=60, like=None):
         """Returns (results, still_waking). Models that haven't finished loading
         are skipped rather than waited for, so a search never hangs."""
         with self.brain.urgent():
-            return self._search(text, image, kinds, limit)
+            return self._search(text, image, kinds, limit, like)
 
-    def _search(self, text, image, kinds, limit):
+    def _search(self, text, image, kinds, limit, like):
         scores = {}
         waking = False
 
@@ -51,6 +53,16 @@ class Hunter:
         elif image is not None:
             vec = self.brain.embed_one("clip", image)
             merge(self.shelf.nearest("clip", vec), *IMAGE_QUERY_SCALE["clip"])
+        skip = None
+        if like is not None:
+            like_path, payloads = like
+            for space, items in payloads.items():
+                if not self.brain.ready(space):
+                    waking = True
+                    continue
+                vec = self.brain.embed_one(space, items[0])
+                merge(self.shelf.nearest(space, vec), *LIKE_SCALE[space])
+            skip = str(like_path)
         text = text.strip()
         if text:
             spaces = ["clip", "text", "code"]
@@ -70,7 +82,7 @@ class Hunter:
         results = []
         for fid, score in scores.items():
             row = info.get(fid)
-            if not row or score < MIN_SCORE:
+            if not row or score < MIN_SCORE or row["path"] == skip:
                 continue
             if kinds and row["kind"] not in kinds:
                 continue
