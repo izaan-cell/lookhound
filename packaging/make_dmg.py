@@ -15,9 +15,19 @@ APP_X, APPS_X, ICON_Y = 180, 460, 250
 TITLE_BAR = 28
 
 
+def _volume_size(app):
+    """dmgbuild's own estimate runs short for apps with thousands of small files,
+    so count each file at its on-disk block size and add headroom."""
+    block = 4096
+    used = sum(-(-f.stat().st_size // block) * block + block
+               for f in app.rglob("*") if f.is_file() and not f.is_symlink())
+    return f"{int(used * 1.15 / 1024 / 1024) + 64}M"
+
+
 def main(app_path, dmg_path):
     app = Path(app_path).resolve()
     settings = {
+        "size": _volume_size(app),
         "files": [str(app)],
         "symlinks": {"Applications": "/Applications"},
         "icon": str(HERE.parent / "src/lookhound/resources/lookhound.icns"),
