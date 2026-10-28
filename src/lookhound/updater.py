@@ -14,21 +14,35 @@ def _as_tuple(version):
 
 
 def check():
-    """Returns (version, download_url) if a newer release exists, else None."""
+    """If newer releases exist, returns a dict: version (the newest), url (its
+    installer for this platform), page (its release notes) and behind (how many
+    released versions are newer than this one). Otherwise None."""
     if not UPDATE_REPO:
         return None
-    url = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+    url = f"https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=50"
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=10) as resp:
-        release = json.load(resp)
-    latest = release.get("tag_name", "")
-    if _as_tuple(latest) <= _as_tuple(__version__):
-        return None
+        releases = json.load(resp)
     want = ".dmg" if IS_MAC else ".msi" if IS_WIN else None
-    for asset in release.get("assets", []):
-        if want and asset["name"].lower().endswith(want):
-            return latest, asset["browser_download_url"]
-    return None
+    newer = []
+    for release in releases:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        if _as_tuple(release.get("tag_name", "")) <= _as_tuple(__version__):
+            continue
+        for asset in release.get("assets", []):
+            if want and asset["name"].lower().endswith(want):
+                newer.append((release, asset["browser_download_url"]))
+                break
+    if not newer:
+        return None
+    newest, download = max(newer, key=lambda r: _as_tuple(r[0]["tag_name"]))
+    return {
+        "version": newest["tag_name"].lstrip("v"),
+        "url": download,
+        "page": newest.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases/latest",
+        "behind": len(newer),
+    }
 
 
 def install(download_url):

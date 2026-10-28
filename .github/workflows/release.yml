@@ -89,7 +89,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - uses: actions/checkout@v5
+        with:
+          path: repo
+      # Every release gets its full write-up from CHANGELOG.md; no notes, no release.
+      - name: Release notes
+        run: python3 repo/packaging/release_notes.py "${GITHUB_REF_NAME}" > notes.md
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: notes.md

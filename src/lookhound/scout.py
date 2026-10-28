@@ -13,7 +13,8 @@ from watchdog.observers import Observer
 
 from . import sniff
 from .brain import WARM_ORDER
-from .shelf import PARTLY, READ, Shelf
+from .settings import __version__
+from .shelf import BY_NAME, PARTLY, READ, Shelf
 
 SETTLE_SECONDS = 1.5  # wait for a file to stop changing before reading it
 BATCH = 32  # files read and embedded together; the models are much faster in bulk
@@ -46,6 +47,7 @@ class Scout(QObject):
         self._pending_lock = threading.Lock()
         self._observer = None
         self._stop = threading.Event()
+        self.retry_unreadable = False  # set when Lookhound has been updated
 
     # ---- public ----------------------------------------------------------
 
@@ -126,6 +128,8 @@ class Scout(QObject):
             known = shelf.state(str(path))
             if known and known[0] == mtime and known[1] == READ:
                 return None
+            if known and known[0] == mtime and known[1] == BY_NAME and not self.retry_unreadable:
+                return None
             found = sniff.sniff(path, self.icon_for)
             if known and known[0] == mtime and known[1] == PARTLY and later is not None:
                 if found and "code" in found[2]:
@@ -145,7 +149,7 @@ class Scout(QObject):
             return
         try:
             vectors = [{} for _ in batch]
-            spaces = {space for *_, payloads in batch for space in payloads}
+            spaces = {space for *_, payloads in batch for space in payloads if not space.startswith("_")}
             if later is not None:
                 spaces.discard("code")
             for space in spaces:
@@ -170,8 +174,9 @@ class Scout(QObject):
                 added = sniff.added_time(path)
             except OSError:
                 added = None
+            ready = BY_NAME if payloads.get("_by_name") else PARTLY if waits else READ
             shelf.put(str(path), path.name, kind, mtime, preview, vecs, commit=False,
-                      ready=PARTLY if waits else READ, added=added)
+                      ready=ready, added=added)
             if waits:
                 later.append((str(path), payloads["code"]))
         shelf.commit()
@@ -237,6 +242,8 @@ class Scout(QObject):
                 self.status.emit(f"Getting to know your files… {read:,} read, {n:,} of {total:,} checked")
         self.count_changed.emit(shelf.count())
         self._read_code(shelf, later)
+        shelf.set_meta("version", __version__)
+        self.retry_unreadable = False
         if read or later:
             self.status.emit("All tucked in. I'll keep watch over your folders.")
         else:
@@ -257,6 +264,8 @@ class Scout(QObject):
         shelf = Shelf()
         self.count_changed.emit(shelf.count())
         returning = shelf.count() > 0
+        # After an update, files that couldn't be read before get another go.
+        self.retry_unreadable = shelf.get_meta("version") != __version__
         paths = self._survey(shelf)
         if returning:
             # Same index as last time (updates keep it too); just check for changes.

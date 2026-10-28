@@ -250,7 +250,8 @@ def sniff(path: Path, icon_for=None):
     if kind is None:
         return None
     name = _readable_name(path)
-    by_name = (kind, None, {"text": [f"{name} {kind}"]})
+    # "_by_name" tells the indexer to try reading it again after Lookhound updates.
+    by_name = (kind, None, {"text": [f"{name} {kind}"], "_by_name": True})
     if kind != "app" and _in_cloud_only(path):
         return by_name
     try:

@@ -41,6 +41,7 @@ COLORS = {
     "bg": "#141311", "card": "#1C1A17", "card_hover": "#22201C", "ink": "#EEE8DE",
     "muted": "#9A9184", "line": "#2E2B26", "accent": "#E09A5C", "button": "#EEE8DE",
     "button_ink": "#141311", "field": "#1C1A17", "tile": "#25221E", "paper": "#EFE6D6",
+    "alert": "#E8B84A",
 }
 KIND_WORDS = {"image": "Picture", "document": "Writing", "code": "Code", "app": "App",
               "archive": "Archive"}
@@ -93,7 +94,14 @@ def stylesheet(c):
     QLabel#asked {{ font-family: "{SERIF}"; font-size: 30px; }}
     QLabel#empty {{ color: {c['muted']}; font-family: "{SERIF}"; font-size: 24px; }}
     QWidget#divider {{ background: {c['line']}; }}
-    QWidget#banner {{ background: {c['card']}; border: 1px solid {c['line']}; border-radius: 8px; }}
+    QWidget#banner {{ background: {c['alert']}; border-radius: 8px; }}
+    QWidget#banner QLabel {{ color: {c['button_ink']}; font-size: 13px; }}
+    QPushButton#bannerlink {{ margin: 0; padding: 8px 12px; color: {c['button_ink']}; font-weight: 600; }}
+    QPushButton#bannerlink:hover {{ text-decoration: underline; }}
+    QPushButton#bannergo {{
+        margin: 0; padding: 8px 16px; border-radius: 6px; background: {c['button_ink']};
+        color: {c['alert']}; font-weight: 600;
+    }}
     QWidget#imagechip {{ background: {c['field']}; border: 1px solid {c['line']}; border-radius: 8px; }}
     QListWidget#folders {{ background: {c['card']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 6px; }}
     QDialog QPushButton {{ color: {c['ink']}; }}
@@ -225,6 +233,17 @@ def clear_layout(layout):
         item = layout.takeAt(0)
         if item.widget():
             item.widget().deleteLater()
+
+
+SITE = "https://lookhound.spools.studio"
+MIN_HEIGHT = 740  # tall enough for the home screen; the menu bar and update bar add to it
+
+
+def changelog_url(version=None):
+    """The website's changelog, or one version's full report (/changelog/v0-3-0)."""
+    if version is None:
+        return f"{SITE}/changelog"
+    return f"{SITE}/changelog/v{version.replace('.', '-')}"
 
 
 def selectable(label):
@@ -448,12 +467,12 @@ class FoldersDialog(QDialog):
 
 
 class Window(QMainWindow):
-    update_found = Signal(str, str)
+    update_found = Signal(object)
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Lookhound")
-        self.setMinimumSize(600, 740)
+        self.setMinimumSize(600, MIN_HEIGHT)
         self.setAcceptDrops(True)
         self.colors = COLORS
         self.setStyleSheet(stylesheet(self.colors))
@@ -503,12 +522,23 @@ class Window(QMainWindow):
         self.banner.setObjectName("banner")
         self.banner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         b = QHBoxLayout(self.banner)
-        b.setContentsMargins(18, 8, 8, 8)
+        b.setContentsMargins(18, 6, 8, 6)
+        b.setSpacing(6)
         self.banner_text = QLabel()
+        self.banner_more = QPushButton("Learn more")
+        self.banner_more.setObjectName("bannerlink")
         self.banner_button = QPushButton("Update")
-        self.banner_button.setObjectName("go")
+        self.banner_button.setObjectName("bannergo")
+        later = QPushButton("✕")
+        later.setObjectName("bannerlink")
+        later.setToolTip("Remind me next time")
+        later.clicked.connect(lambda: (self.banner.hide(), self._fit_height()))
+        for button in (self.banner_more, self.banner_button, later):
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
         b.addWidget(self.banner_text, 1)
+        b.addWidget(self.banner_more)
         b.addWidget(self.banner_button)
+        b.addWidget(later)
         self.banner.hide()
         lay.addWidget(self.banner)
 
@@ -533,6 +563,17 @@ class Window(QMainWindow):
 
         self.setCentralWidget(root)
         self._menus()
+        self._fit_height()
+
+    def _fit_height(self):
+        """Keep the home screen from squashing when a menu bar (Windows) or the
+        update bar takes some of the window's height."""
+        extra = 0 if self.menuBar().isNativeMenuBar() else self.menuBar().sizeHint().height()
+        if not self.banner.isHidden():
+            extra += self.banner.sizeHint().height() + self.centralWidget().layout().spacing()
+        self.setMinimumHeight(MIN_HEIGHT + extra)
+        if self.height() < MIN_HEIGHT + extra:
+            self.resize(self.width(), MIN_HEIGHT + extra)
 
     def _menus(self):
         """The menu bar: on a Mac it sits at the top of the screen. Edit works on
@@ -540,8 +581,11 @@ class Window(QMainWindow):
         bar = self.menuBar()
         app_menu = bar.addMenu("Lookhound")
         about = QAction("About Lookhound", self, menuRole=QAction.MenuRole.AboutRole)
-        about.triggered.connect(lambda: QDesktopServices.openUrl(QUrl("https://lookhound.spools.studio/about")))
+        about.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(f"{SITE}/about")))
         app_menu.addAction(about)
+        news = QAction("What's New", self)
+        news.triggered.connect(lambda: QDesktopServices.openUrl(QUrl(changelog_url())))
+        app_menu.addAction(news)
         folders = QAction("Folders…", self, menuRole=QAction.MenuRole.PreferencesRole)
         folders.setShortcut(QKeySequence.StandardKey.Preferences)
         folders.triggered.connect(self._edit_folders)
@@ -1027,14 +1071,23 @@ class Window(QMainWindow):
         except Exception:
             found = None
         if found:
-            self.update_found.emit(*found)
+            self.update_found.emit(found)
 
-    @Slot(str, str)
-    def _show_update(self, version, url):
-        self.banner_text.setText(f"Lookhound {version} is available.")
+    @Slot(object)
+    def _show_update(self, found):
+        """The yellow bar: which version is out, how far behind this one is,
+        Learn more (that version's full report on the website) and Update."""
+        version, behind = found["version"], found["behind"]
+        if behind > 1:
+            text = f"You're {behind} versions behind. Lookhound {version} is ready."
+        else:
+            text = f"Lookhound {version} is ready, with new things and fixes."
+        self.banner_text.setText(text)
+        self.banner_more.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(changelog_url(version))))
         self.banner_button.clicked.connect(lambda: (self.banner_text.setText(
-            "Downloading…"), QTimer.singleShot(50, lambda: updater.install(url))))
+            f"Downloading Lookhound {version}…"), QTimer.singleShot(50, lambda: updater.install(found["url"]))))
         self.banner.show()
+        self._fit_height()
 
     def changeEvent(self, event):
         # Coming back to the window counts as seeing home again, unless mid-search.

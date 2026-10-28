@@ -4,18 +4,20 @@ and are compared with numpy instead: slower, but the same answers."""
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
 from .brain import DIMS
-from .settings import DB_PATH
+from .settings import DB_PATH, ICON_CACHE
 
 SPACES = tuple(DIMS)
 # Several threads open the index at start-up; setting it up one at a time keeps
 # them from tripping over each other while tables are created or upgraded.
 _SETUP = threading.Lock()
-# files.ready: 0 = known by name only, 1 = fully read, 2 = read but waiting on the code model.
-NAME_ONLY, READ, PARTLY = 0, 1, 2
+# files.ready: 0 = known by name only, 1 = fully read, 2 = read but waiting on the code
+# model, 3 = couldn't be read, so kept by name (tried again after each update).
+NAME_ONLY, READ, PARTLY, BY_NAME = 0, 1, 2, 3
 
 
 def _try_load_vec(conn):
@@ -128,6 +130,7 @@ class Shelf:
             )"""
         )
         c.execute("CREATE INDEX IF NOT EXISTS chunks_file ON chunks(file_id)")
+        c.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
         for space, dim in DIMS.items():
             if self.has_vec:
                 c.execute(
@@ -147,6 +150,14 @@ class Shelf:
         row = self.conn.execute(
             "SELECT mtime FROM files WHERE path=? AND ready=?", (path, READ)).fetchone()
         return row[0] if row else None
+
+    def get_meta(self, key):
+        row = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key, value):
+        self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)", (key, value))
+        self.conn.commit()
 
     def state(self, path):
         """(mtime, ready) of a file we know, or None."""
@@ -208,13 +219,17 @@ class Shelf:
         c.execute("DELETE FROM files WHERE id=?", (row[0],))
 
     def remove(self, path):
-        self._drop(path)
-        # A deleted folder takes everything inside it along.
+        """Forget a deleted file (or folder, with everything in it), including the
+        preview picture made for it."""
         prefix = path.rstrip("/\\") + ("\\" if "\\" in path else "/")
-        for (child,) in self.conn.execute(
-            "SELECT path FROM files WHERE substr(path, 1, ?) = ?", (len(prefix), prefix)
-        ).fetchall():
-            self._drop(child)
+        gone = self.conn.execute(
+            "SELECT path, preview FROM files WHERE path = ? OR substr(path, 1, ?) = ?",
+            (path, len(prefix), prefix),
+        ).fetchall()
+        for old, preview in gone:
+            self._drop(old)
+            if preview and Path(preview).parent == ICON_CACHE:
+                Path(preview).unlink(missing_ok=True)
         self.conn.commit()
 
     def all_paths(self):
