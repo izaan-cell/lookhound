@@ -468,6 +468,9 @@ class FoldersDialog(QDialog):
 
 class Window(QMainWindow):
     update_found = Signal(object)
+    update_progress = Signal(float)
+    update_ready = Signal(str)
+    update_failed = Signal()
 
     def __init__(self):
         super().__init__()
@@ -504,6 +507,11 @@ class Window(QMainWindow):
         self.retry = QTimer(self, singleShot=True, interval=4000)
         self.retry.timeout.connect(lambda: self._search(quiet=True))
         self.update_found.connect(self._show_update)
+        self.update_progress.connect(
+            lambda f: self.banner_text.setText(f"Downloading Lookhound {self.update['version']}… {f:.0%}"))
+        self.update_ready.connect(self._update_downloaded)
+        self.update_failed.connect(self._update_failed)
+        self.update = None
 
         self._restore_filter()
         self._refresh_home()
@@ -1082,12 +1090,45 @@ class Window(QMainWindow):
             text = f"You're {behind} versions behind. Lookhound {version} is ready."
         else:
             text = f"Lookhound {version} is ready, with new things and fixes."
+        self.update = dict(found, text=text, installer=None)
         self.banner_text.setText(text)
         self.banner_more.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(changelog_url(version))))
-        self.banner_button.clicked.connect(lambda: (self.banner_text.setText(
-            f"Downloading Lookhound {version}…"), QTimer.singleShot(50, lambda: updater.install(found["url"]))))
+        self.banner_button.clicked.connect(self._update_clicked)
         self.banner.show()
         self._fit_height()
+
+    def _update_clicked(self):
+        """First click downloads; once it's here, the button restarts into it."""
+        if self.update["installer"]:
+            updater.restart_into(self.update["installer"])
+            self.close()
+            QApplication.instance().quit()
+            return
+        self.banner_button.setEnabled(False)
+        self.banner_text.setText(f"Downloading Lookhound {self.update['version']}…")
+
+        def fetch():
+            try:
+                path = updater.download(self.update["url"], self.update_progress.emit)
+            except Exception as exc:
+                print(f"[lookhound] update download failed: {exc}")
+                self.update_failed.emit()
+                return
+            self.update_ready.emit(str(path))
+        threading.Thread(target=fetch, daemon=True, name="update").start()
+
+    @Slot(str)
+    def _update_downloaded(self, path):
+        self.update["installer"] = path
+        self.banner_text.setText(f"Lookhound {self.update['version']} is ready to install.")
+        self.banner_button.setText("Restart to update")
+        self.banner_button.setEnabled(True)
+
+    @Slot()
+    def _update_failed(self):
+        self.banner_text.setText("Couldn't download the update. Check your connection and try again.")
+        self.banner_button.setText("Try again")
+        self.banner_button.setEnabled(True)
 
     def changeEvent(self, event):
         # Coming back to the window counts as seeing home again, unless mid-search.

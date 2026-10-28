@@ -4,6 +4,23 @@ The full story of every version. This file is the source for the changelog on
 lookhound.spools.studio/changelog and for each GitHub release's notes, so every
 release must have a section here.
 
+## 0.3.1
+_Released 28 October 2026_
+
+Updating is now one click: Lookhound downloads the new version, installs it and opens again by itself.
+
+### New
+- **Restart to update.** Click **Update** in the yellow bar and Lookhound downloads the new version in the background, showing how far along it is. When it's ready, the button becomes **Restart to update**: Lookhound closes, swaps in the new version where the old one was, and opens again. No dragging into Applications, and no installer windows.
+- **Your index and settings come along.** Nothing is read again after an update, except files an older version couldn't open.
+
+### Improvements
+- **Fast updates on a Mac.** Updates come as a zip that unpacks in about a minute, instead of the disk image, which could take several.
+- **Quiet updates on Windows.** The installer runs in the background with a small progress bar, then Lookhound opens again.
+- **Downloads recover.** If your connection drops while an update downloads, it carries on from where it stopped.
+
+### Fixes
+- **Safe if something goes wrong.** If an update can't be unpacked, the version you have stays exactly as it was, and the downloaded file is shown so you can install it by hand.
+
 ## 0.3.0
 _Released 28 October 2026_
 

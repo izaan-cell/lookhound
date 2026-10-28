@@ -17,7 +17,9 @@ jobs:
         include:
           - os: macos-latest
             platform: macOS
-            artifact: dist/*.dmg
+            artifact: |
+              dist/*.dmg
+              dist/*.zip
           - os: windows-latest
             platform: windows
             artifact: dist/*.msi
@@ -58,7 +60,9 @@ jobs:
         run: |
           python -m pip install dmgbuild
           app=$(ls -d build/lookhound/macos/app/*.app | head -1)
-          rm -f dist/Lookhound-*.dmg dist/Lookhound-*.zip
+          rm -f dist/Lookhound-*.dmg
+          # The zip is what the app's Restart to update uses: much faster to unpack than the DMG.
+          mv dist/Lookhound-*.zip dist/Lookhound-mac.zip
           python packaging/make_dmg.py "$app" dist/Lookhound.dmg
 
       - name: Package (Windows)
