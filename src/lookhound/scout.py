@@ -224,18 +224,23 @@ class Scout(QObject):
         """Read every file properly, a batch at a time."""
         self.busy_changed.emit(True)
         total = len(paths)
-        batch, later = [], []
+        batch, later, read = [], [], 0
         for n, path in enumerate(paths, 1):
             prepared = self._prepare(shelf, path, later)
             if prepared:
                 batch.append(prepared)
-            if len(batch) >= BATCH or n == total:
+                read += 1
+            if len(batch) >= BATCH or (n == total and batch):
                 self._flush(shelf, batch, later)
                 batch = []
-                self.status.emit(f"Getting to know your files… {n:,} of {total:,}")
+                # Only files actually being read count; ones already known are just checked.
+                self.status.emit(f"Getting to know your files… {read:,} read, {n:,} of {total:,} checked")
         self.count_changed.emit(shelf.count())
         self._read_code(shelf, later)
-        self.status.emit("All tucked in. I'll keep watch over your folders.")
+        if read or later:
+            self.status.emit("All tucked in. I'll keep watch over your folders.")
+        else:
+            self.status.emit("All tucked in. Nothing new since last time.")
         self.busy_changed.emit(False)
 
     def _watch(self):
@@ -251,10 +256,17 @@ class Scout(QObject):
     def _run(self):
         shelf = Shelf()
         self.count_changed.emit(shelf.count())
+        returning = shelf.count() > 0
         paths = self._survey(shelf)
-        self.status.emit("Settling in. The very first time takes a few minutes.")
+        if returning:
+            # Same index as last time (updates keep it too); just check for changes.
+            self.status.emit("Welcome back. Checking for anything new…")
+            step = "Waking up"
+        else:
+            self.status.emit("Settling in. The very first time takes a few minutes.")
+            step = "Settling in"
         self.brain.warm_up(
-            lambda name: self.status.emit(f"Settling in ({WARM_ORDER.index(name) + 1} of 3)…"),
+            lambda name: self.status.emit(f"{step} ({WARM_ORDER.index(name) + 1} of 3)…"),
             lambda name: self.status.emit("The internet is being slow. I'll keep trying…"),
         )
         self._watch()

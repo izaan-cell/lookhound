@@ -15,6 +15,10 @@ try:
 except ImportError:
     HEIC = set()
 
+# Only small thumbnails are ever made, so Pillow's guard against huge images
+# (it refuses anything over ~179 million pixels) would just skip big upscales.
+Image.MAX_IMAGE_PIXELS = None
+
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".ico"} | HEIC
 DOC_EXT = {".pdf", ".docx", ".pptx", ".txt", ".md", ".markdown", ".rtf", ".csv", ".html", ".htm"}
 CODE_EXT = {
@@ -39,7 +43,6 @@ SKIP_BUNDLE_EXT = {
     ".musiclibrary", ".tvlibrary", ".imovielibrary", ".lrdata", ".git",
 }
 
-MAX_BYTES = 60 * 1024 * 1024
 DOC_CHUNK, DOC_CHUNKS = 1000, 6
 CODE_CHUNK = 1000  # the code model reads the opening of each file
 
@@ -139,7 +142,8 @@ def _read_text(path: Path):
                 if shape.has_text_frame:
                     lines.append(shape.text_frame.text)
         return "\n".join(lines)
-    raw = path.read_text(errors="ignore")[: DOC_CHUNK * DOC_CHUNKS * 2]
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        raw = f.read(DOC_CHUNK * DOC_CHUNKS * 2)  # just the opening, however big the file
     if ext in {".html", ".htm"}:
         raw = re.sub(r"<(script|style).*?</\1>|<[^>]+>", " ", raw, flags=re.S | re.I)
     elif ext == ".rtf":
@@ -226,26 +230,54 @@ def _readable_name(path: Path):
     return re.sub(r"[_\-.]+", " ", path.stem)
 
 
+def _in_cloud_only(path: Path):
+    """iCloud's "Optimise Storage" leaves a placeholder on disk; reading it would
+    start a download, so such files are found by name until they're here."""
+    return bool(getattr(path.stat(), "st_flags", 0) & 0x40000000)  # SF_DATALESS
+
+
+def _descriptive(name):
+    """Names like magnific_can-you-bring-minar-pakis are worth reading as words;
+    IMG_2041 or DSC00012 are not."""
+    return len([w for w in name.split() if len(w) > 2 and w.isalpha()]) >= 3
+
+
 def sniff(path: Path, icon_for=None):
     """Returns (kind, preview, payloads) or None to skip.
-    payloads maps a model space to the list of things to embed in it."""
+    payloads maps a model space to the list of things to embed in it.
+    A file that can't be read is still returned, to be found by its name."""
     kind = kind_of(path)
     if kind is None:
         return None
-    # Big archives are fine: only their contents list and a few small files are read.
-    if kind not in ("app", "archive") and path.stat().st_size > MAX_BYTES:
-        return None
     name = _readable_name(path)
+    by_name = (kind, None, {"text": [f"{name} {kind}"]})
+    if kind != "app" and _in_cloud_only(path):
+        return by_name
+    try:
+        return _sniff(path, kind, name, icon_for)
+    except Exception as exc:
+        print(f"[lookhound] read {path.name} by name only: {exc}")
+        return by_name
+
+
+def _sniff(path, kind, name, icon_for):
+    # No size limits: only the opening of a big file, an archive's contents list,
+    # or a picture's thumbnail is ever kept.
 
     if kind == "image":
         with Image.open(path) as im:
             im.seek(0)
+            if im.format == "JPEG":
+                im.draft("RGB", (512, 512))  # decode at a fraction of full size: fast, little memory
             im = im.convert("RGB")
             thumb = _cache_path(path)
             small = im.copy()
             small.thumbnail((256, 256))
             small.save(thumb, "JPEG", quality=82)
-        return kind, str(thumb), {"clip": [small]}
+        payloads = {"clip": [small]}
+        if _descriptive(name):
+            payloads["text"] = [name]  # AI tools often put the prompt in the file name
+        return kind, str(thumb), payloads
 
     if kind == "app":
         payloads = {"text": [f"{name} application"]}

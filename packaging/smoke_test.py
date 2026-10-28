@@ -67,7 +67,10 @@ def make_samples():
     with py7zr.SevenZipFile(FILES / "wedding.7z", "w") as z:
         z.writestr(b"", "wedding_photos/first_dance.jpg")
         z.writestr(b"", "wedding_photos/bride_and_groom_cake.jpg")
-    return 8
+    # An AI upscale: bigger than Pillow's usual limit, with the prompt in its name.
+    huge = Image.new("RGB", (14200, 14200), (200, 120, 40))
+    huge.save(FILES / "magnific_can-you-bring-minar-pakis_iGCJGKi3uK.jpg", quality=70)
+    return 9
 
 
 def main():
@@ -115,6 +118,7 @@ def main():
         "snorkelling and surfing trip": "bali_2025.zip",
         "receipts for the accountant": "tax_records.tar.gz",
         "wedding cake photos": "wedding.7z",
+        "minar pakistan": "magnific_can-you-bring-minar-pakis_iGCJGKi3uK.jpg",
     }
     for query, wanted in searches.items():
         found, _ = hunter.search(query)
