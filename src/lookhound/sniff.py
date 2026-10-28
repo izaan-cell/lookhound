@@ -25,7 +25,8 @@ CODE_EXT = {
 }
 # Settings and data files: worth finding by name and gist, not worth the code model.
 DATA_EXT = {".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".css", ".scss"}
-ARCHIVE_EXT = {".zip"}
+# .gz, .bz2 and .xz are usually tarballs; a lone compressed file is found by name.
+ARCHIVE_EXT = {".zip", ".7z", ".rar", ".tar", ".tgz", ".tbz2", ".txz", ".gz", ".bz2", ".xz"}
 APP_EXT = {".app"} if IS_MAC else ({".lnk", ".exe"} if IS_WIN else set())
 
 SKIP_DIRS = {
@@ -146,35 +147,78 @@ def _read_text(path: Path):
     return raw
 
 
-ZIP_PEEK_FILES, ZIP_PEEK_BYTES = 4, 64 * 1024
+PEEK_FILES, PEEK_BYTES = 4, 64 * 1024  # small text files read from inside an archive
+TAR_MAX_MEMBERS = 2000  # a tarball has to be unpacked to list it, so stop early
 
 
-def _sniff_zip(path: Path, name):
-    """A zip is found by its name, the names inside it, and the opening of a
-    few small text files it holds. Nothing is extracted to disk."""
+def _peekable(filename, size):
+    ext = Path(filename).suffix.lower()
+    return (ext in DOC_EXT - {".pdf", ".docx", ".pptx"} or ext in CODE_EXT) and 0 < size <= PEEK_BYTES
+
+
+def _hidden(filename):
+    return filename.startswith(("__MACOSX/", ".")) or "/." in filename
+
+
+def _list_zip(path):
     import zipfile
 
     with zipfile.ZipFile(path) as zf:
-        members = [m for m in zf.infolist()
-                   if not m.is_dir() and not m.filename.startswith(("__MACOSX/", "."))
-                   and "/." not in m.filename]
-        inside = [m.filename.rstrip("/") for m in members]
-        texts = []
-        for m in members:
-            if len(texts) >= ZIP_PEEK_FILES:
+        members = [m for m in zf.infolist() if not m.is_dir() and not _hidden(m.filename)]
+        texts = [zf.read(m)[:DOC_CHUNK].decode("utf-8", "ignore")
+                 for m in members if _peekable(m.filename, m.file_size)][:PEEK_FILES]
+        return [m.filename for m in members], texts
+
+
+def _list_tar(path):
+    import tarfile
+
+    names, texts = [], []
+    with tarfile.open(path, "r:*") as tf:
+        for m in tf:  # streams through the archive, so it can stop part way
+            if len(names) >= TAR_MAX_MEMBERS:
                 break
-            ext = Path(m.filename).suffix.lower()
-            if (ext in DOC_EXT - {".pdf", ".docx", ".pptx"} or ext in CODE_EXT) \
-                    and 0 < m.file_size <= ZIP_PEEK_BYTES:
-                try:
-                    texts.append(zf.read(m)[:DOC_CHUNK].decode("utf-8", "ignore"))
-                except Exception:
-                    pass
+            if not m.isfile() or _hidden(m.name):
+                continue
+            names.append(m.name)
+            if len(texts) < PEEK_FILES and _peekable(m.name, m.size):
+                texts.append(tf.extractfile(m).read(DOC_CHUNK).decode("utf-8", "ignore"))
+    return names, texts
+
+
+def _list_7z(path):
+    """Names only: reading a file inside a solid 7z means unpacking all before it."""
+    import py7zr
+
+    with py7zr.SevenZipFile(path) as z:
+        return [f.filename for f in z.list() if not f.is_directory and not _hidden(f.filename)], []
+
+
+def _list_rar(path):
+    """Names only: rarfile reads the listing itself but needs unrar to unpack."""
+    import rarfile
+
+    with rarfile.RarFile(path) as r:
+        return [i.filename for i in r.infolist() if not i.is_dir() and not _hidden(i.filename)], []
+
+
+def _sniff_archive(path: Path, name):
+    """An archive is found by its name, the names inside it, and (for zips and
+    tarballs) the opening of a few small text files it holds. Nothing is
+    extracted to disk. One that can't be read (encrypted, damaged, or just a
+    gzipped file) is still found by its name."""
+    ext = path.suffix.lower()
+    reader = {".zip": _list_zip, ".7z": _list_7z, ".rar": _list_rar}.get(ext, _list_tar)
+    try:
+        inside, texts = reader(path)
+    except Exception:
+        inside, texts = [], []
     listing = ", ".join(_readable_name(Path(f)) for f in inside[:200])
-    chunks = _chunks(f"{name} zip archive containing {listing}", DOC_CHUNK, 2)
+    chunks = _chunks(f"{name} archive containing {listing}", DOC_CHUNK, 2)
     chunks += [c for t in texts for c in _chunks(t, DOC_CHUNK, 1) if c]
     count = len(inside)
-    preview = f"{count} file{'s' if count != 1 else ''}: " + ", ".join(Path(f).name for f in inside[:8])
+    preview = (f"{count} file{'s' if count != 1 else ''}: " + ", ".join(Path(f).name for f in inside[:8])
+               if inside else "")
     return "archive", preview, {"text": chunks}
 
 
@@ -188,7 +232,7 @@ def sniff(path: Path, icon_for=None):
     kind = kind_of(path)
     if kind is None:
         return None
-    # Big zips are fine: only their table of contents and a few small files are read.
+    # Big archives are fine: only their contents list and a few small files are read.
     if kind not in ("app", "archive") and path.stat().st_size > MAX_BYTES:
         return None
     name = _readable_name(path)
@@ -214,7 +258,7 @@ def sniff(path: Path, icon_for=None):
         return kind, preview, payloads
 
     if kind == "archive":
-        return _sniff_zip(path, name)
+        return _sniff_archive(path, name)
 
     text = _read_text(path)
     if kind == "document":

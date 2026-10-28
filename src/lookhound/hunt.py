@@ -17,6 +17,7 @@ FILTERS = {
     "document": {"document"},
     "code": {"code"},
     "app": {"app"},
+    "archive": {"archive"},
 }
 NAME_BONUS = 0.35
 MIN_SCORE = 0.15

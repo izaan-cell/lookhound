@@ -9,15 +9,16 @@ from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QFileInfo, QObject, QSize, Qt, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QFileInfo, QObject, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (
-    QAbstractFileIconProvider, QFont, QFontDatabase, QIcon, QPainter,
+    QAbstractFileIconProvider, QDesktopServices, QFont, QFontDatabase, QIcon, QPainter,
     QPainterPath, QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFileIconProvider,
-    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QPushButton,
+    QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+    QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -41,9 +42,9 @@ COLORS = {
     "button_ink": "#141311", "field": "#1C1A17", "tile": "#25221E", "paper": "#EFE6D6",
 }
 KIND_WORDS = {"image": "Picture", "document": "Writing", "code": "Code", "app": "App",
-              "archive": "Zip"}
+              "archive": "Archive"}
 CHIPS = [("all", "Everything"), ("image", "Pictures"), ("document", "Writing"),
-         ("code", "Code"), ("app", "Apps")]
+         ("code", "Code"), ("app", "Apps"), ("archive", "Archives")]
 COLUMN = 620  # width of the centered home column
 SERIF = "Instrument Serif"  # replaced with the loaded family name at startup
 
@@ -54,7 +55,12 @@ def stylesheet(c):
     QWidget {{ color: {c['ink']}; font-size: 14px; }}
     QLabel#hello {{ font-family: "{SERIF}"; font-size: 52px; }}
     QLabel#sub {{ color: {c['muted']}; font-size: 15px; }}
+    QLabel {{ selection-background-color: {c['accent']}; selection-color: {c['button_ink']}; }}
     QLabel#hint, QLabel#muted {{ color: {c['muted']}; font-size: 12px; }}
+    QMenu {{ background: {c['card']}; border: 1px solid {c['line']}; border-radius: 8px; padding: 4px; }}
+    QMenu::item {{ padding: 6px 18px; border-radius: 5px; }}
+    QMenu::item:selected {{ background: {c['card_hover']}; color: {c['accent']}; }}
+    QMenu::separator {{ height: 1px; background: {c['line']}; margin: 4px 8px; }}
     QLabel#eyebrow {{ color: {c['accent']}; font-size: 11px; font-weight: 600; letter-spacing: 2px; }}
     QLineEdit#search {{
         background: {c['field']}; border: 1px solid {c['line']}; border-radius: 8px;
@@ -162,6 +168,16 @@ def clear_layout(layout):
         item = layout.takeAt(0)
         if item.widget():
             item.widget().deleteLater()
+
+
+def selectable(label):
+    """Let a label's text be highlighted with the mouse and copied with Cmd/Ctrl+C.
+    Right-clicks pass through to the results menu instead of Qt's own."""
+    label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse
+                                  | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+    label.setCursor(Qt.CursorShape.IBeamCursor)
+    label.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+    return label
 
 
 def reveal(path):
@@ -306,22 +322,32 @@ class ResultCard(QWidget):
         text.setSpacing(3)
         name = QLabel(Path(result["name"]).stem if result["kind"] == "app" else result["name"])
         name.setStyleSheet("font-weight: 500; font-size: 15px; background: transparent;")
+        self.texts = [selectable(name)]
         text.addWidget(name)
         folder = Path(result["path"]).parent
         where = QLabel(f"{folder.name or folder}")
         where.setObjectName("muted")
+        where.setToolTip(str(folder))
+        self.texts.append(selectable(where))
         text.addWidget(where)
         if result["kind"] in ("document", "code", "archive") and preview:
             peek = QLabel(" ".join(preview.split())[:160])
             peek.setObjectName("muted")
             peek.setMinimumWidth(1)  # let the row shrink instead of the preview widening it
             peek.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            self.texts.append(selectable(peek))
             text.addWidget(peek)
         lay.addLayout(text, 1)
 
         label = QLabel(KIND_WORDS[result["kind"]].upper())
         label.setObjectName("eyebrow")
         lay.addWidget(label, 0, Qt.AlignmentFlag.AlignTop)
+
+    def selected_text(self):
+        return " ".join(t.selectedText() for t in self.texts if t.hasSelectedText())
+
+    def preview_text(self):
+        return self.texts[2].text() if len(self.texts) > 2 else ""
 
 
 class FoldersDialog(QDialog):
@@ -577,6 +603,7 @@ class Window(QMainWindow):
         self.asked_thumb.hide()
         self.asked = QLabel()
         self.asked.setObjectName("asked")
+        selectable(self.asked)
         asked.addWidget(self.asked_thumb, 0, Qt.AlignmentFlag.AlignVCenter)
         asked.addWidget(self.asked, 0, Qt.AlignmentFlag.AlignVCenter)
         asked.addStretch()
@@ -603,7 +630,11 @@ class Window(QMainWindow):
         self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
         self.list.setSelectionMode(QListWidget.SelectionMode.NoSelection)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Clicking the picture or the space around the text shows the file; the
+        # text itself can be highlighted and copied. Right-click for everything else.
         self.list.itemClicked.connect(lambda item: reveal(item.data(Qt.ItemDataRole.UserRole)))
+        self.list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._result_menu)
         lay.addWidget(self.list, 1)
 
         self.empty = QLabel()
@@ -757,11 +788,32 @@ class Window(QMainWindow):
         for r in results:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, r["path"])
-            item.setToolTip(f"Click to show it in {place}\n{r['path']}")
+            item.setToolTip(f"Click the picture to show it in {place}. Right-click to open or copy.\n{r['path']}")
             card = ResultCard(r, self.colors)
             item.setSizeHint(card.sizeHint())
             self.list.addItem(item)
             self.list.setItemWidget(item, card)
+
+    def _result_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if item is None:
+            return
+        path = item.data(Qt.ItemDataRole.UserRole)
+        card = self.list.itemWidget(item)
+        clipboard = QApplication.clipboard()
+        menu = QMenu(self)
+        place = "Finder" if IS_MAC else "File Explorer"
+        menu.addAction("Open", lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+        menu.addAction(f"Show in {place}", lambda: reveal(path))
+        menu.addSeparator()
+        chosen = card.selected_text() if card else ""
+        if chosen:
+            menu.addAction("Copy", lambda: clipboard.setText(chosen))
+        menu.addAction("Copy name", lambda: clipboard.setText(Path(path).name))
+        menu.addAction("Copy path", lambda: clipboard.setText(path))
+        if card and card.preview_text():
+            menu.addAction("Copy preview", lambda: clipboard.setText(card.preview_text()))
+        menu.exec(self.list.viewport().mapToGlobal(pos))
 
     # ---- image queries ---------------------------------------------------
 
