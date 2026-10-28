@@ -23,19 +23,29 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
+      # Test with the smoke test from the same release as the installer, so a
+      # newer test never runs against an older app.
+      - name: Find the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          Write-Host "Testing $tag"
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Choose scratch folders
         run: |
           "LOOKHOUND_HOME=$env:RUNNER_TEMP\lookhound-home" >> $env:GITHUB_ENV
           "SMOKE_OUT=$env:RUNNER_TEMP\smoke" >> $env:GITHUB_ENV
 
-      - name: Download the latest installer
+      - name: Download the installer
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download --repo $env:GITHUB_REPOSITORY --pattern Lookhound.msi --dir dist
-          gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+        run: gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern Lookhound.msi --dir dist
 
       - name: Install
         run: |
