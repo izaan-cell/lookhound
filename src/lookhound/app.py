@@ -13,8 +13,8 @@ from PIL import Image
 from PySide6.QtCore import QFileInfo, QObject, QSize, Qt, QThread, QTimer, QUrl, Signal, Slot
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtGui import (
-    QAbstractFileIconProvider, QDesktopServices, QFont, QFontDatabase, QIcon, QPainter,
-    QPainterPath, QPixmap,
+    QAbstractFileIconProvider, QAction, QDesktopServices, QFont, QFontDatabase, QIcon,
+    QKeySequence, QPainter, QPainterPath, QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QDialog, QDialogButtonBox, QFileDialog, QFileIconProvider,
@@ -532,6 +532,66 @@ class Window(QMainWindow):
         lay.addLayout(foot)
 
         self.setCentralWidget(root)
+        self._menus()
+
+    def _menus(self):
+        """The menu bar: on a Mac it sits at the top of the screen. Edit works on
+        whatever has focus: the search boxes, or result text you've highlighted."""
+        bar = self.menuBar()
+        app_menu = bar.addMenu("Lookhound")
+        about = QAction("About Lookhound", self, menuRole=QAction.MenuRole.AboutRole)
+        about.triggered.connect(lambda: QDesktopServices.openUrl(QUrl("https://lookhound.spools.studio/about")))
+        app_menu.addAction(about)
+        folders = QAction("Folders…", self, menuRole=QAction.MenuRole.PreferencesRole)
+        folders.setShortcut(QKeySequence.StandardKey.Preferences)
+        folders.triggered.connect(self._edit_folders)
+        app_menu.addAction(folders)
+        quit_ = QAction("Quit Lookhound", self, menuRole=QAction.MenuRole.QuitRole)
+        quit_.setShortcut(QKeySequence.StandardKey.Quit)
+        quit_.triggered.connect(self.close)
+        app_menu.addAction(quit_)
+
+        edit = bar.addMenu("Edit")
+        for entry in [
+            ("Undo", QKeySequence.StandardKey.Undo, "undo"),
+            ("Redo", QKeySequence.StandardKey.Redo, "redo"),
+            None,
+            ("Cut", QKeySequence.StandardKey.Cut, "cut"),
+            ("Copy", QKeySequence.StandardKey.Copy, "copy"),
+            ("Paste", QKeySequence.StandardKey.Paste, "paste"),
+            ("Select All", QKeySequence.StandardKey.SelectAll, "selectAll"),
+        ]:
+            if entry is None:
+                edit.addSeparator()
+                continue
+            label, key, name = entry
+            action = QAction(label, self)
+            action.setShortcut(key)
+            action.triggered.connect(lambda _=False, n=name: self._edit(n))
+            edit.addAction(action)
+
+        go = bar.addMenu("Go")
+        home = QAction("Home", self)
+        home.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        home.triggered.connect(self._home)
+        go.addAction(home)
+        pick = QAction("Find Things Like a File…", self)
+        pick.setShortcut(QKeySequence.StandardKey.Open)
+        pick.triggered.connect(self._pick_image)
+        go.addAction(pick)
+
+    def _edit(self, name):
+        widget = QApplication.focusWidget()
+        if isinstance(widget, QLineEdit):
+            getattr(widget, name)()
+        elif isinstance(widget, QLabel):
+            if name in ("copy", "cut") and widget.hasSelectedText():
+                QApplication.clipboard().setText(widget.selectedText())
+            elif name == "selectAll":
+                widget.setSelection(0, len(widget.text()))
+        elif name == "paste" and self.pages.currentIndex() == 0:
+            self.home_query.setFocus()
+            self.home_query.paste()
 
     def _home_page(self):
         page = QWidget()
