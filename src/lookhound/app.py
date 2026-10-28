@@ -2,6 +2,7 @@
 when you search."""
 import os
 import queue
+import random
 import subprocess
 import sys
 import threading
@@ -114,6 +115,18 @@ def stylesheet(c):
     """
 
 
+# The home headline changes every time it's shown; one word in italics each.
+HEADLINES = [
+    "What can I <i>find</i> for you?",
+    "What are we <i>looking</i> for?",
+    "What went <i>missing</i> today?",
+    "Where did it <i>wander</i> off?",
+    "Tell me what you're <i>after</i>.",
+    "What shall I <i>sniff</i> out?",
+    "Lost something <i>lovely</i>?",
+    "Let's go <i>fetch</i> it.",
+    "What's on your <i>mind</i>?",
+]
 RECENT_KEEP = 6
 WAKING = ("Still fetching what I need to understand your files.\n"
           "The first time takes a few minutes; I'll search again by myself the moment I'm ready.")
@@ -509,7 +522,8 @@ class Window(QMainWindow):
         self.greeting.clicked.connect(self._ask_name)
         col.addWidget(self.greeting, 0, Qt.AlignmentFlag.AlignCenter)
 
-        hello = QLabel("What can I <i>find</i> for you?")
+        self.hello = hello = QLabel()
+        self._new_headline()
         hello.setObjectName("hello")
         hello.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.comfort = sub = QLabel(comfort)
@@ -666,7 +680,12 @@ class Window(QMainWindow):
         self.pages.setCurrentIndex(1)
         self._search()
 
+    def _new_headline(self):
+        current = self.hello.text()
+        self.hello.setText(random.choice([h for h in HEADLINES if h != current]))
+
     def _home(self):
+        self._new_headline()
         self.image = None
         self.like = None
         self.asked_thumb.hide()
@@ -910,6 +929,13 @@ class Window(QMainWindow):
         self.banner_button.clicked.connect(lambda: (self.banner_text.setText(
             "Downloading…"), QTimer.singleShot(50, lambda: updater.install(url))))
         self.banner.show()
+
+    def changeEvent(self, event):
+        # Coming back to the window counts as seeing home again, unless mid-search.
+        if (event.type() == event.Type.ActivationChange and self.isActiveWindow()
+                and self.pages.currentIndex() == 0 and not self.home_query.text()):
+            self._new_headline()
+        super().changeEvent(event)
 
     def closeEvent(self, event):
         self.prefs["window"] = [self.width(), self.height()]
