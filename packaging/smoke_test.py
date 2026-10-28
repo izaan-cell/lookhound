@@ -30,6 +30,8 @@ def _save():
 
 
 def make_samples():
+    import zipfile
+
     from PIL import Image, ImageDraw
     from pptx import Presentation
 
@@ -49,7 +51,11 @@ def make_samples():
     slide.shapes.title.text = "Quarterly sales review"
     slide.placeholders[1].text = "Revenue by region, pricing and customer retention."
     deck.save(FILES / "sales_deck.pptx")
-    return 5
+    with zipfile.ZipFile(FILES / "bali_2025.zip", "w") as zf:
+        zf.writestr("beach_day/surfing_lesson.jpg", b"")
+        zf.writestr("beach_day/sunset_over_the_sea.jpg", b"")
+        zf.writestr("itinerary.txt", "Ubud rice terraces, snorkelling at Nusa Penida, beach clubs in Canggu.")
+    return 6
 
 
 def main():
@@ -94,6 +100,7 @@ def main():
         "a function that checks a password": "login.py",
         "a blue circle": "blue_circle.png",
         "sales presentation": "sales_deck.pptx",
+        "snorkelling and surfing trip": "bali_2025.zip",
     }
     for query, wanted in searches.items():
         found, _ = hunter.search(query)

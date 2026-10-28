@@ -25,6 +25,7 @@ CODE_EXT = {
 }
 # Settings and data files: worth finding by name and gist, not worth the code model.
 DATA_EXT = {".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".css", ".scss"}
+ARCHIVE_EXT = {".zip"}
 APP_EXT = {".app"} if IS_MAC else ({".lnk", ".exe"} if IS_WIN else set())
 
 SKIP_DIRS = {
@@ -91,6 +92,8 @@ def kind_of(path: Path):
         return "image"
     if ext in DOC_EXT:
         return "document"
+    if ext in ARCHIVE_EXT:
+        return "archive"
     if ext in CODE_EXT:
         return "code"
     return None
@@ -143,6 +146,38 @@ def _read_text(path: Path):
     return raw
 
 
+ZIP_PEEK_FILES, ZIP_PEEK_BYTES = 4, 64 * 1024
+
+
+def _sniff_zip(path: Path, name):
+    """A zip is found by its name, the names inside it, and the opening of a
+    few small text files it holds. Nothing is extracted to disk."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as zf:
+        members = [m for m in zf.infolist()
+                   if not m.is_dir() and not m.filename.startswith(("__MACOSX/", "."))
+                   and "/." not in m.filename]
+        inside = [m.filename.rstrip("/") for m in members]
+        texts = []
+        for m in members:
+            if len(texts) >= ZIP_PEEK_FILES:
+                break
+            ext = Path(m.filename).suffix.lower()
+            if (ext in DOC_EXT - {".pdf", ".docx", ".pptx"} or ext in CODE_EXT) \
+                    and 0 < m.file_size <= ZIP_PEEK_BYTES:
+                try:
+                    texts.append(zf.read(m)[:DOC_CHUNK].decode("utf-8", "ignore"))
+                except Exception:
+                    pass
+    listing = ", ".join(_readable_name(Path(f)) for f in inside[:200])
+    chunks = _chunks(f"{name} zip archive containing {listing}", DOC_CHUNK, 2)
+    chunks += [c for t in texts for c in _chunks(t, DOC_CHUNK, 1) if c]
+    count = len(inside)
+    preview = f"{count} file{'s' if count != 1 else ''}: " + ", ".join(Path(f).name for f in inside[:8])
+    return "archive", preview, {"text": chunks}
+
+
 def _readable_name(path: Path):
     return re.sub(r"[_\-.]+", " ", path.stem)
 
@@ -153,7 +188,8 @@ def sniff(path: Path, icon_for=None):
     kind = kind_of(path)
     if kind is None:
         return None
-    if kind != "app" and path.stat().st_size > MAX_BYTES:
+    # Big zips are fine: only their table of contents and a few small files are read.
+    if kind not in ("app", "archive") and path.stat().st_size > MAX_BYTES:
         return None
     name = _readable_name(path)
 
@@ -176,6 +212,9 @@ def sniff(path: Path, icon_for=None):
                 payloads["clip"] = [im.convert("RGB")]
             preview = str(icon_file)
         return kind, preview, payloads
+
+    if kind == "archive":
+        return _sniff_zip(path, name)
 
     text = _read_text(path)
     if kind == "document":

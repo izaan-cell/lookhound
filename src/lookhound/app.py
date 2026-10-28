@@ -40,7 +40,8 @@ COLORS = {
     "muted": "#9A9184", "line": "#2E2B26", "accent": "#E09A5C", "button": "#EEE8DE",
     "button_ink": "#141311", "field": "#1C1A17", "tile": "#25221E", "paper": "#EFE6D6",
 }
-KIND_WORDS = {"image": "Picture", "document": "Writing", "code": "Code", "app": "App"}
+KIND_WORDS = {"image": "Picture", "document": "Writing", "code": "Code", "app": "App",
+              "archive": "Zip"}
 CHIPS = [("all", "Everything"), ("image", "Pictures"), ("document", "Writing"),
          ("code", "Code"), ("app", "Apps")]
 COLUMN = 620  # width of the centered home column
@@ -310,7 +311,7 @@ class ResultCard(QWidget):
         where = QLabel(f"{folder.name or folder}")
         where.setObjectName("muted")
         text.addWidget(where)
-        if result["kind"] in ("document", "code") and preview:
+        if result["kind"] in ("document", "code", "archive") and preview:
             peek = QLabel(" ".join(preview.split())[:160])
             peek.setObjectName("muted")
             peek.setMinimumWidth(1)  # let the row shrink instead of the preview widening it
