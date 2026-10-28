@@ -61,8 +61,9 @@ class Hunter:
                 if not self.brain.ready(space):
                     waking = True
                     continue
-                vec = self.brain.embed_one(space, items[0])
-                merge(self.shelf.nearest(space, vec), *LIKE_SCALE[space])
+                for item in items:
+                    vec = self.brain.embed_one(space, item)
+                    merge(self.shelf.nearest(space, vec), *LIKE_SCALE[space])
             skip = str(like_path)
         text = text.strip()
         if text:

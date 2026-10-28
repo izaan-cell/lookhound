@@ -29,10 +29,10 @@ from .hunt import FILTERS, Hunter
 from .scout import Scout
 from .shelf import Shelf
 from .settings import ICON_CACHE, IS_MAC, IS_WIN, load_prefs, save_prefs
-from .sniff import APP_EXT, CODE_EXT, DOC_EXT, IMAGE_EXT, sniff
+from .sniff import APP_EXT, ARCHIVE_EXT, CODE_EXT, DOC_EXT, IMAGE_EXT, sniff
 
 LOOKALIKE_EXT = IMAGE_EXT | APP_EXT | {".icns"}  # searched by how they look
-PICKABLE_EXT = LOOKALIKE_EXT | DOC_EXT | CODE_EXT  # what + and drops accept
+PICKABLE_EXT = LOOKALIKE_EXT | DOC_EXT | CODE_EXT | ARCHIVE_EXT  # what + and drops accept
 
 RESOURCES = Path(__file__).parent / "resources"
 
@@ -969,6 +969,7 @@ class Window(QMainWindow):
             f"Apps ({globs(APP_EXT)})",
             f"Writing ({globs(DOC_EXT)})",
             f"Code ({globs(CODE_EXT)})",
+            f"Archives ({globs(ARCHIVE_EXT)})",
         ])
         path, _ = QFileDialog.getOpenFileName(
             self, "Find things like this", str(Path.home()), filters)
@@ -985,7 +986,8 @@ class Window(QMainWindow):
             found = None
         if not found:
             return
-        payloads = {space: items[:1] for space, items in found[2].items() if space != "clip"}
+        # A few chunks, so an archive is compared by what's inside, not just its file list.
+        payloads = {space: items[:3] for space, items in found[2].items() if space != "clip"}
         icon = self.icons.provider.icon(QFileInfo(str(path))).pixmap(QSize(80, 80))
         self.image = None
         self.like = (path, payloads)
