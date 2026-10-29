@@ -123,7 +123,8 @@ fi
 # Same on Windows: wait for Lookhound to close, install quietly, start it again.
 WIN_SCRIPT = """param($ProcessId, $Msi, $Exe)
 Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
-$p = Start-Process msiexec -ArgumentList '/i', ('"' + $Msi + '"'), '/passive', '/norestart' -Wait -PassThru
+$log = Join-Path (Split-Path $Msi) 'update.log'
+$p = Start-Process msiexec -ArgumentList '/i', ('"' + $Msi + '"'), '/passive', '/norestart', '/l*v', ('"' + $log + '"') -Wait -PassThru
 if ($p.ExitCode -eq 0) { Remove-Item $Msi -ErrorAction SilentlyContinue }
 if (-not $env:LOOKHOUND_NO_REOPEN) { Start-Process $Exe }
 """

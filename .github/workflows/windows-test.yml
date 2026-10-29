@@ -72,18 +72,28 @@ jobs:
       # The app's own "Restart to update" helper: waits for Lookhound to quit,
       # installs the .msi quietly, then opens Lookhound again.
       - name: Update and restart
+        timeout-minutes: 10
         run: |
           Copy-Item dist\Lookhound.msi "$env:RUNNER_TEMP\update.msi"
           $helper = "$env:RUNNER_TEMP\apply_update.ps1"
           $code = "from lookhound import updater; open(r'$helper', 'w').write(updater.WIN_SCRIPT)"
-          Start-Process $env:LOOKHOUND_EXE -ArgumentList '-c', "`"$code`"" -Wait
+          $w = Start-Process $env:LOOKHOUND_EXE -ArgumentList '-c', "`"$code`"" -PassThru
+          if (-not $w.WaitForExit(120000)) { $w.Kill(); throw "Couldn't write the update helper" }
           if (-not (Test-Path $helper)) { Write-Host "This version has no restart-to-update helper yet; skipping"; exit 0 }
-          $app = Start-Process powershell -ArgumentList '-Command', 'Start-Sleep 3' -PassThru
-          & powershell -NoProfile -ExecutionPolicy Bypass -File $helper -ProcessId $app.Id -Msi "$env:RUNNER_TEMP\update.msi" -Exe $env:LOOKHOUND_EXE
-          Start-Sleep 20
-          $running = Get-Process Lookhound -ErrorAction SilentlyContinue
+          # Stand-in for the running app: the helper waits for it to quit first.
+          $app = Start-Process powershell -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 3' -PassThru
+          # Detached, like the app starts it, so this step doesn't wait on Lookhound itself.
+          Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helper, `
+            '-ProcessId', $app.Id, '-Msi', "$env:RUNNER_TEMP\update.msi", '-Exe', "`"$env:LOOKHOUND_EXE`""
+          $deadline = (Get-Date).AddMinutes(5)
+          while ((Get-Date) -lt $deadline) {
+            $running = Get-Process Lookhound -ErrorAction SilentlyContinue
+            if ($running -and -not (Test-Path "$env:RUNNER_TEMP\update.msi")) { break }
+            Start-Sleep 5
+          }
+          if (Test-Path "$env:RUNNER_TEMP\update.log") { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 15 }
           if (-not $running) { throw "Lookhound didn't open again after updating" }
-          if (Test-Path "$env:RUNNER_TEMP\update.msi") { throw "The installer wasn't cleaned up after a successful update" }
+          if (Test-Path "$env:RUNNER_TEMP\update.msi") { throw "The installer wasn't cleaned up after updating" }
           Write-Host "Installed quietly and opened again (process $($running[0].Id))"
           $running | Stop-Process -Force
 
