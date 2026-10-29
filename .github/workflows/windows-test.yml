@@ -69,37 +69,52 @@ jobs:
           foreach ($s in $r.steps) { Write-Host ("{0}  {1}  {2}" -f ($(if ($s.ok) { 'PASS' } else { 'FAIL' })), $s.step, $s.detail) }
           if (-not $r.passed) { throw "Smoke test failed" }
 
-      # The app's own "Restart to update" helper: waits for Lookhound to quit,
-      # installs the .msi quietly, then opens Lookhound again.
+      # A real update, the way the app's "Restart to update" does it: start from
+      # the release before this one, then let the helper install this one quietly
+      # once the old app has quit, and open it again.
       - name: Update and restart
-        timeout-minutes: 10
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          $older = (gh release list --repo $env:GITHUB_REPOSITORY --limit 20 --json tagName --jq '.[].tagName' |
+                    Where-Object { $_ -ne $env:RELEASE_TAG })[0]
+          Write-Host "Updating from $older to $env:RELEASE_TAG"
+          gh release download $older --repo $env:GITHUB_REPOSITORY --pattern Lookhound.msi --dir older
+          Start-Process msiexec -ArgumentList '/x', 'dist\Lookhound.msi', '/qn' -Wait
+          $p = Start-Process msiexec -ArgumentList '/i', 'older\Lookhound.msi', '/qn' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Couldn't install $older (code $($p.ExitCode))" }
+          function Installed { (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                                'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue |
+                                Where-Object DisplayName -like 'Lookhound*').DisplayVersion }
+          Write-Host "Installed before updating: $(Installed)"
+
+          python -c "import re; s = open('src/lookhound/updater.py').read(); print(re.search(r'WIN_SCRIPT = \x22\x22\x22(.*?)\x22\x22\x22', s, re.S).group(1))" > "$env:RUNNER_TEMP\apply_update.ps1"
           Copy-Item dist\Lookhound.msi "$env:RUNNER_TEMP\update.msi"
-          $helper = "$env:RUNNER_TEMP\apply_update.ps1"
-          $code = "from lookhound import updater; open(r'$helper', 'w').write(updater.WIN_SCRIPT)"
-          $w = Start-Process $env:LOOKHOUND_EXE -ArgumentList '-c', "`"$code`"" -PassThru
-          if (-not $w.WaitForExit(120000)) { $w.Kill(); throw "Couldn't write the update helper" }
-          if (-not (Test-Path $helper)) { Write-Host "This version has no restart-to-update helper yet; skipping"; exit 0 }
-          # Stand-in for the running app: the helper waits for it to quit first.
           $app = Start-Process powershell -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 3' -PassThru
           # Detached, like the app starts it, so this step doesn't wait on Lookhound itself.
-          Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helper, `
+          Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$env:RUNNER_TEMP\apply_update.ps1", `
             '-ProcessId', $app.Id, '-Msi', "$env:RUNNER_TEMP\update.msi", '-Exe', "`"$env:LOOKHOUND_EXE`""
-          $deadline = (Get-Date).AddMinutes(5)
+          $deadline = (Get-Date).AddMinutes(8)
           while ((Get-Date) -lt $deadline) {
             $running = Get-Process Lookhound -ErrorAction SilentlyContinue
             if ($running -and -not (Test-Path "$env:RUNNER_TEMP\update.msi")) { break }
             Start-Sleep 5
           }
-          if (Test-Path "$env:RUNNER_TEMP\update.log") { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 15 }
+          if (Test-Path "$env:RUNNER_TEMP\update.log") { Get-Content "$env:RUNNER_TEMP\update.log" -Tail 20 }
+          $now = Installed
+          Write-Host "Installed after updating: $now"
+          if ($now -ne $env:RELEASE_TAG.TrimStart('v')) { throw "Expected $env:RELEASE_TAG after updating, found $now" }
           if (-not $running) { throw "Lookhound didn't open again after updating" }
           if (Test-Path "$env:RUNNER_TEMP\update.msi") { throw "The installer wasn't cleaned up after updating" }
-          Write-Host "Installed quietly and opened again (process $($running[0].Id))"
+          Write-Host "Updated $older to $env:RELEASE_TAG quietly and opened again"
           $running | Stop-Process -Force
 
       - name: Uninstall
         if: always()
+        timeout-minutes: 5
         run: |
+          Get-Process Lookhound, msiexec -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           if (-not $env:LOOKHOUND_EXE) { exit 0 }
           $p = Start-Process msiexec -ArgumentList '/x', 'dist\Lookhound.msi', '/qn' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "Uninstall failed with code $($p.ExitCode)" }
