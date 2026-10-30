@@ -34,17 +34,28 @@ ARCHIVE_EXT = {".zip", ".7z", ".rar", ".tar", ".tgz", ".tbz2", ".txz", ".gz", ".
 APP_EXT = {".app"} if IS_MAC else ({".lnk", ".exe"} if IS_WIN else set())
 
 SKIP_DIRS = {
-    "node_modules", "__pycache__", "venv", ".venv", "env", "site-packages", "build",
-    "dist", "target", "out", "Pods", "DerivedData", "vendor", "bower_components",
+    "node_modules", "__pycache__", "venv", ".venv", "site-packages", "Pods",
+    "DerivedData", "bower_components",
 }
+# Generated output, skipped only inside a code project; a folder of your own
+# called "build" or "out" is searched like any other.
+PROJECT_OUTPUT_DIRS = {"build", "dist", "out", "target", "vendor", "env"}
+PROJECT_MARKERS = (
+    "package.json", "pyproject.toml", "setup.py", "Cargo.toml", "go.mod", "pom.xml",
+    "build.gradle", "Gemfile", "composer.json", "CMakeLists.txt", "Makefile", ".git",
+)
 # Folder-shaped things that aren't really folders.
 SKIP_BUNDLE_EXT = {
     ".photoslibrary", ".xcodeproj", ".xcworkspace", ".framework", ".bundle",
     ".musiclibrary", ".tvlibrary", ".imovielibrary", ".lrdata", ".git",
 }
 
-DOC_CHUNK, DOC_CHUNKS = 1000, 6
-CODE_CHUNK = 1000  # the code model reads the opening of each file
+DOC_CHUNK = 1000
+# How much of a file the meaning models read, spread across the whole file so
+# something deep inside still counts. Exact words are kept for all of it.
+DOC_CHUNKS, CODE_TEXT_CHUNKS, CODE_CHUNKS = 12, 8, 2
+READ_CAP = 500_000  # characters of text kept for exact-word search
+PDF_PAGES = 400
 
 
 def _finder_date_added(path):
@@ -110,6 +121,7 @@ def skip_dir(path: Path):
         or name in SKIP_DIRS
         or path.suffix.lower() in SKIP_BUNDLE_EXT
         or path.suffix.lower() in APP_EXT  # an .app is a result, not a place to look
+        or (name in PROJECT_OUTPUT_DIRS and any((path.parent / m).exists() for m in PROJECT_MARKERS))
     )
 
 
@@ -122,13 +134,30 @@ def _chunks(text, size, limit):
     return [text[i : i + size] for i in range(0, min(len(text), size * limit), size)] or [""]
 
 
+def _spread(text, size, count):
+    """Up to `count` pieces of `size` characters covering the whole text: all of
+    it when short, otherwise evenly spaced from the start to the very end."""
+    text = re.sub(r"[ \t]+", " ", text).strip()
+    if len(text) <= size * count:
+        return _chunks(text, size, count)
+    step = (len(text) - size) / (count - 1)
+    return [text[round(i * step): round(i * step) + size] for i in range(count)]
+
+
+def words_of(text):
+    """Text for exact-word search, with camelCase and snake_case split so that
+    "handle login" finds handleLogin and handle_login."""
+    split = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
+    return text if split == text else f"{text}\n{split}"
+
+
 def _read_text(path: Path):
     ext = path.suffix.lower()
     if ext == ".pdf":
         from pypdf import PdfReader
 
         reader = PdfReader(str(path))
-        return "\n".join((page.extract_text() or "") for page in reader.pages[:12])
+        return "\n".join((page.extract_text() or "") for page in reader.pages[:PDF_PAGES])
     if ext == ".docx":
         import docx
 
@@ -143,7 +172,7 @@ def _read_text(path: Path):
                     lines.append(shape.text_frame.text)
         return "\n".join(lines)
     with open(path, encoding="utf-8", errors="ignore") as f:
-        raw = f.read(DOC_CHUNK * DOC_CHUNKS * 2)  # just the opening, however big the file
+        raw = f.read(READ_CAP)  # a big file's first half a million characters
     if ext in {".html", ".htm"}:
         raw = re.sub(r"<(script|style).*?</\1>|<[^>]+>", " ", raw, flags=re.S | re.I)
     elif ext == ".rtf":
@@ -220,10 +249,11 @@ def _sniff_archive(path: Path, name):
     listing = ", ".join(_readable_name(Path(f)) for f in inside[:200])
     chunks = _chunks(f"{name} archive containing {listing}", DOC_CHUNK, 2)
     chunks += [c for t in texts for c in _chunks(t, DOC_CHUNK, 1) if c]
+    words = words_of(" ".join([name] + [Path(f).name for f in inside[:5000]] + texts))
     count = len(inside)
     preview = (f"{count} file{'s' if count != 1 else ''}: " + ", ".join(Path(f).name for f in inside[:8])
                if inside else "")
-    return "archive", preview, {"text": chunks}
+    return "archive", preview, {"text": chunks, "_words": words}
 
 
 def _readable_name(path: Path):
@@ -251,11 +281,14 @@ def sniff(path: Path, icon_for=None):
         return None
     name = _readable_name(path)
     # "_by_name" tells the indexer to try reading it again after Lookhound updates.
-    by_name = (kind, None, {"text": [f"{name} {kind}"], "_by_name": True})
+    by_name = (kind, None, {"text": [f"{name} {kind}"], "_by_name": True,
+                            "_words": words_of(f"{name} {path.name}")})
     if kind != "app" and _in_cloud_only(path):
         return by_name
     try:
-        return _sniff(path, kind, name, icon_for)
+        found = _sniff(path, kind, name, icon_for)
+        found[2].setdefault("_words", words_of(f"{name} {path.name}"))
+        return found
     except Exception as exc:
         print(f"[lookhound] read {path.name} by name only: {exc}")
         return by_name
@@ -293,12 +326,14 @@ def _sniff(path, kind, name, icon_for):
     if kind == "archive":
         return _sniff_archive(path, name)
 
-    text = _read_text(path)
+    text = _read_text(path)[:READ_CAP]
+    words = words_of(f"{name}\n{text}")
     if kind == "document":
-        chunks = _chunks(f"{name}\n{text}", DOC_CHUNK, DOC_CHUNKS)
-        return kind, text.strip()[:300], {"text": chunks}
+        chunks = _spread(f"{name}\n{text}", DOC_CHUNK, DOC_CHUNKS)
+        return kind, text.strip()[:300], {"text": chunks, "_words": words}
     snippet = "\n".join(text.strip().splitlines()[:8])
-    head = _chunks(f"# {path.name}\n{text}", CODE_CHUNK, 1)
+    body = f"# {path.name}\n{text}"
     if path.suffix.lower() in DATA_EXT:
-        return kind, snippet, {"text": head}
-    return kind, snippet, {"code": head, "text": [name] + head}
+        return kind, snippet, {"text": _spread(body, DOC_CHUNK, 4), "_words": words}
+    return kind, snippet, {"code": _spread(body, DOC_CHUNK, CODE_CHUNKS),
+                           "text": [name] + _spread(body, DOC_CHUNK, CODE_TEXT_CHUNKS), "_words": words}

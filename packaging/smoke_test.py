@@ -70,7 +70,16 @@ def make_samples():
     # An AI upscale: bigger than Pillow's usual limit, with the prompt in its name.
     huge = Image.new("RGB", (14200, 14200), (200, 120, 40))
     huge.save(FILES / "magnific_can-you-bring-minar-pakis_iGCJGKi3uK.jpg", quality=70)
-    return 9
+    # Deep inside: a function far down a long code file, a phrase at the end of a
+    # long document, and a file in a folder named "build" outside any project.
+    helpers = "\n".join(f"def helper_{i}(x):\n    return x * {i}\n" for i in range(200))
+    (FILES / "ledger.py").write_text(helpers + "\n\ndef reconcile_invoice_totals(invoices, payments):\n"
+                                     "    return {i.id: i.total - sum(p.amount for p in payments) for i in invoices}\n")
+    filler = " ".join(["the team reviewed the budget and the plan for next quarter"] * 6000)
+    (FILES / "annual_review.txt").write_text(filler + " Appendix: the pigeon migration survey counted forty thousand birds.")
+    (FILES / "build").mkdir(exist_ok=True)
+    (FILES / "build" / "garden_plan.txt").write_text("Tomatoes along the south fence, herbs by the kitchen door.")
+    return 12
 
 
 def main():
@@ -119,6 +128,10 @@ def main():
         "receipts for the accountant": "tax_records.tar.gz",
         "wedding cake photos": "wedding.7z",
         "minar pakistan": "magnific_can-you-bring-minar-pakis_iGCJGKi3uK.jpg",
+        "reconcile invoice totals": "ledger.py",
+        "pigeon migration": "annual_review.txt",
+        "garden plan tomatoes": "garden_plan.txt",
+        "bali_2025.zip": "bali_2025.zip",
     }
     for query, wanted in searches.items():
         found, _ = hunter.search(query)

@@ -19,7 +19,11 @@ FILTERS = {
     "app": {"app"},
     "archive": {"archive"},
 }
-NAME_BONUS = 0.35
+# Exact words: a file whose name holds every word you typed comes first; words
+# found in its contents (code, deep in a long document) add on top of meaning.
+NAME_ALL_BONUS = 0.8
+NAME_SOME_BONUS = 0.3
+WORDS_WEIGHT = 0.45
 MIN_SCORE = 0.15
 RELATIVE_FLOOR = 0.6
 
@@ -54,7 +58,7 @@ class Hunter:
         elif image is not None:
             vec = self.brain.embed_one("clip", image)
             merge(self.shelf.nearest("clip", vec), *IMAGE_QUERY_SCALE["clip"])
-        skip = None
+        skip = None  # the picked file, shown first
         if like is not None:
             like_path, payloads = like
             for space, items in payloads.items():
@@ -77,14 +81,18 @@ class Hunter:
             for space in spaces:
                 vec = self.brain.embed_one(space, text)
                 merge(self.shelf.nearest(space, vec), *TEXT_QUERY_SCALE[space])
-            for fid in self.shelf.name_hits(text):
-                scores[fid] = scores.get(fid, 0.0) + NAME_BONUS
+            for fid, (in_text, in_name) in self.shelf.word_hits(text).items():
+                bonus = WORDS_WEIGHT * in_text
+                bonus += NAME_ALL_BONUS if in_name == 1 else NAME_SOME_BONUS * in_name
+                scores[fid] = scores.get(fid, 0.0) + bonus
 
         info = self.shelf.describe(scores.keys())
         results = []
         for fid, score in scores.items():
             row = info.get(fid)
-            if not row or score < MIN_SCORE or row["path"] == skip:
+            if row and row["path"] == skip:
+                score = max(score, 10.0)  # the file you picked is the best match for itself
+            if not row or score < MIN_SCORE:
                 continue
             if kinds and row["kind"] not in kinds:
                 continue

@@ -4,6 +4,27 @@ The full story of every version. This file is the source for the changelog on
 lookhound.spools.studio/changelog and for each GitHub release's notes, so every
 release must have a section here.
 
+## 0.3.2
+_Released 30 October 2026_
+
+Lookhound now reads whole files, not just their beginnings, and finds exact words as well as meaning. Code, things buried deep inside long documents, and files with underscores in their names are found far more reliably.
+
+### New
+- **Exact words.** Alongside searching by meaning, Lookhound now matches the exact words you type, anywhere in a file. Function names, variable names, codes and rare words come up first, which meaning search alone often missed.
+- **Code names are split for you.** Searching "handle user login" finds handleUserLogin and handle_user_login.
+- **The file you pick comes first.** When you use + (or drop a file) to find files like one you have, that file itself is now shown at the top, followed by similar ones.
+
+### Improvements
+- **Whole files are read.** Lookhound used to read only the start of each file: about 1,000 characters of code, a few thousand of a document and the first 12 pages of a PDF. Now it reads the whole thing, up to half a million characters and 400 PDF pages, so a function far down a long file or a sentence near the end of a report is found.
+- **Better code results.** The text model now reads 8 pieces spread across each code file instead of just its opening, and the code model reads 2.
+- **Names match however you type them.** Searching "client invoices 2024" or "client_invoices_2024.zip" both find client_invoices_2024.zip; dashes, underscores and dots no longer get in the way.
+- **One-time refresh.** After updating, Lookhound reads your files again once, in this more thorough way. Search keeps working the whole time, and the status line says when it's done.
+
+### Fixes
+- **Searching a file name with an underscore failed.** The underscore was dropped from your search, so names like bali_2025.zip were missed. Fixed.
+- **Folders named build, dist, out, target, vendor or env were never searched.** They're now skipped only inside a code project (where they hold generated files), and searched like any other folder elsewhere.
+- In our tests, the share of tricky searches that found the right file first went from 6 in 10 to 10 in 10.
+
 ## 0.3.1
 _Released 28 October 2026_
 
