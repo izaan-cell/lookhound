@@ -3,6 +3,7 @@ platform (.dmg or .msi), and once Lookhound has quit, swaps the new version in
 and opens it again. Does nothing until UPDATE_REPO is set."""
 import json
 import os
+import ssl
 import subprocess
 import sys
 import time
@@ -12,6 +13,21 @@ from pathlib import Path
 from .settings import DATA_DIR, IS_MAC, IS_WIN, UPDATE_REPO, __version__
 
 UPDATES = DATA_DIR / "updates"
+
+
+def _tls():
+    """The packaged Python on a Mac ships without trusted certificates, so every
+    HTTPS request would fail; use certifi's bundle (already in the app) instead."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+def _open(req, timeout):
+    return urllib.request.urlopen(req, timeout=timeout, context=_tls())
 
 
 def _as_tuple(version):
@@ -26,7 +42,7 @@ def check():
         return None
     url = f"https://api.github.com/repos/{UPDATE_REPO}/releases?per_page=50"
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with _open(req, 10) as resp:
         releases = json.load(resp)
     # On a Mac the zip unpacks in seconds; the DMG (for people downloading by
     # hand) is the fallback for releases made before the zip was published.
@@ -66,7 +82,7 @@ def download(url, on_progress=None):
         have = partial.stat().st_size if partial.exists() else 0
         req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
+            with _open(req, 30) as resp:
                 if have and resp.status != 206:  # server ignored the resume; start over
                     have = 0
                     partial.unlink(missing_ok=True)

@@ -153,6 +153,17 @@ def main():
     step("result text can be highlighted",
          card is not None and card.selected_text() == "sales", card and card.selected_text())
 
+    # The updater has to reach GitHub from inside the installed app (its Python
+    # has its own certificates); pretend to be an old version so it finds one.
+    try:
+        from lookhound import updater
+        if hasattr(updater, "_tls"):
+            updater.__version__ = "0.0.1"
+            found = updater.check()
+            step("update check reaches GitHub", found is not None, found and found["version"])
+    except Exception as exc:
+        step("update check reaches GitHub", False, exc)
+
     report["passed"] = all(s["ok"] for s in report["steps"])
 
 

@@ -4,6 +4,13 @@ The full story of every version. This file is the source for the changelog on
 lookhound.spools.studio/changelog and for each GitHub release's notes, so every
 release must have a section here.
 
+## 0.3.3
+_Released 31 October 2026_
+
+### Fixes
+- **Update alerts now work on Mac.** The Mac app couldn't check for updates: its secure connection to GitHub failed silently, so the yellow update bar never appeared and Restart to update couldn't download anything. It now uses the trusted certificates that come with Lookhound. If you're on 0.3.2 or earlier on a Mac, download this version once from the website; after that, updates arrive in the app.
+- Every release now checks, inside the installed app on both Mac and Windows, that the update check can reach GitHub.
+
 ## 0.3.2
 _Released 30 October 2026_
 
