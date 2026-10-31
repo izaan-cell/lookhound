@@ -79,7 +79,34 @@ def make_samples():
     (FILES / "annual_review.txt").write_text(filler + " Appendix: the pigeon migration survey counted forty thousand birds.")
     (FILES / "build").mkdir(exist_ok=True)
     (FILES / "build" / "garden_plan.txt").write_text("Tomatoes along the south fence, herbs by the kitchen door.")
-    return 12
+    # Video and sound: a short clip of a red square, and a tagged song.
+    import av
+    import numpy as np
+    from mutagen.easyid3 import EasyID3
+    clip = av.open(str(FILES / "square_clip.mp4"), "w")
+    stream = clip.add_stream("h264", rate=10)
+    stream.width = stream.height = 256
+    stream.pix_fmt = "yuv420p"
+    for _ in range(20):
+        frame = Image.new("RGB", (256, 256), "white")
+        ImageDraw.Draw(frame).rectangle((50, 50, 206, 206), fill=(220, 30, 30))
+        for packet in stream.encode(av.VideoFrame.from_image(frame)):
+            clip.mux(packet)
+    for packet in stream.encode():
+        clip.mux(packet)
+    clip.close()
+    song = av.open(str(FILES / "track01.mp3"), "w")
+    audio = song.add_stream("mp3", rate=44100)
+    tone = av.AudioFrame.from_ndarray((np.sin(np.arange(88200) * 0.05) * 3000).astype("int16").reshape(1, -1),
+                                      format="s16", layout="mono")
+    tone.sample_rate = 44100
+    for packet in list(audio.encode(tone)) + list(audio.encode()):
+        song.mux(packet)
+    song.close()
+    tags = EasyID3()
+    tags.update({"title": "Sunset Lullaby", "artist": "Nora Keys", "album": "Quiet Hours", "genre": "Jazz"})
+    tags.save(str(FILES / "track01.mp3"))
+    return 14
 
 
 def main():
@@ -132,11 +159,17 @@ def main():
         "pigeon migration": "annual_review.txt",
         "garden plan tomatoes": "garden_plan.txt",
         "bali_2025.zip": "bali_2025.zip",
+        "red square video": "square_clip.mp4",
+        "jazz by nora keys": "track01.mp3",
     }
     for query, wanted in searches.items():
         found, _ = hunter.search(query)
         names = [r["name"] for r in found[:3]]
         step(f"search '{query}'", names[:1] == [wanted], f"top results {names}")
+
+    found, _ = hunter.search("video")
+    step("searching 'video' lists only videos", found and all(r["kind"] == "video" for r in found),
+         [r["name"] for r in found])
 
     found, _ = hunter.search("photos", kinds=A.FILTERS["archive"])
     step("Archives tab shows only archives", found and all(r["kind"] == "archive" for r in found),

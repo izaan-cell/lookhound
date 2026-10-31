@@ -3,7 +3,7 @@
 Each model scores on its own scale (CLIP text-to-image similarities sit around
 0.2-0.35, MiniLM's around 0.2-0.8), so raw scores are stretched onto a shared
 0-1 range before results from different models are compared."""
-from .shelf import Shelf
+from .shelf import Shelf, query_terms
 
 # (floor, ceiling) of "meaningful" similarity per space, measured by hand.
 TEXT_QUERY_SCALE = {"clip": (0.21, 0.33), "text": (0.15, 0.70), "code": (0.25, 0.75)}
@@ -18,9 +18,26 @@ FILTERS = {
     "code": {"code"},
     "app": {"app"},
     "archive": {"archive"},
+    "video": {"video"},
+    "audio": {"audio"},
 }
 # Exact words: a file whose name holds every word you typed comes first; words
 # found in its contents (code, deep in a long document) add on top of meaning.
+# Words that name a kind of file ("video", "song", "photo"...) lift that kind,
+# so "video" lists your videos and "beach video" prefers videos of beaches.
+KIND_TERMS = {
+    "video": "video", "videos": "video", "movie": "video", "movies": "video", "clip": "video",
+    "clips": "video", "film": "video", "mp4": "video", "mov": "video",
+    "song": "audio", "songs": "audio", "music": "audio", "audio": "audio", "sound": "audio",
+    "sounds": "audio", "track": "audio", "tracks": "audio", "mp3": "audio", "podcast": "audio",
+    "voice": "audio", "memo": "audio",
+    "photo": "image", "photos": "image", "picture": "image", "pictures": "image", "image": "image",
+    "images": "image", "pic": "image", "pics": "image", "screenshot": "image", "screenshots": "image",
+    "zip": "archive", "zips": "archive", "archive": "archive", "archives": "archive", "rar": "archive",
+    "app": "app", "apps": "app", "application": "app",
+    "pdf": "document", "document": "document", "documents": "document", "doc": "document", "docs": "document",
+}
+KIND_BONUS = 0.5
 NAME_ALL_BONUS = 0.8
 NAME_SOME_BONUS = 0.3
 WORDS_WEIGHT = 0.45
@@ -74,7 +91,7 @@ class Hunter:
             spaces = ["clip", "text", "code"]
             if kinds and "code" not in kinds:
                 spaces.remove("code")
-            if kinds and not kinds & {"image", "app"}:
+            if kinds and not kinds & {"image", "app", "video", "audio"}:
                 spaces.remove("clip")
             waking = waking or not all(self.brain.ready(s) for s in spaces)
             spaces = [s for s in spaces if self.brain.ready(s)]
@@ -87,6 +104,16 @@ class Hunter:
                 scores[fid] = scores.get(fid, 0.0) + bonus
 
         info = self.shelf.describe(scores.keys())
+        # Only on Everything: a tab you picked already says which kind you want.
+        wanted_kinds = set() if kinds else {KIND_TERMS[t] for t in query_terms(text) if t in KIND_TERMS}
+        if wanted_kinds:
+            # Bring in files of that kind that didn't match otherwise, then lift them all.
+            for fid, kind in self.shelf.of_kinds(wanted_kinds):
+                scores.setdefault(fid, 0.0)
+            info = self.shelf.describe(scores.keys())
+            for fid, row in info.items():
+                if row["kind"] in wanted_kinds:
+                    scores[fid] += KIND_BONUS
         results = []
         for fid, score in scores.items():
             row = info.get(fid)
@@ -99,7 +126,11 @@ class Hunter:
             row["score"] = score
             results.append(row)
         results.sort(key=lambda r: -r["score"])
-        if results:
+        terms = query_terms(text)
+        just_kinds = bool(wanted_kinds) and all(t in KIND_TERMS for t in terms)  # "video", "songs"
+        if just_kinds:
+            results = [r for r in results if r["kind"] in wanted_kinds]
+        elif results:
             # Drop stragglers that trail far behind the best match.
             floor = results[0]["score"] * RELATIVE_FLOOR
             results = [r for r in results if r["score"] >= floor]

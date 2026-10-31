@@ -29,10 +29,10 @@ from .hunt import FILTERS, Hunter
 from .scout import Scout
 from .shelf import Shelf
 from .settings import ICON_CACHE, IS_MAC, IS_WIN, load_prefs, save_prefs
-from .sniff import APP_EXT, ARCHIVE_EXT, CODE_EXT, DOC_EXT, IMAGE_EXT, sniff
+from .sniff import APP_EXT, ARCHIVE_EXT, AUDIO_EXT, CODE_EXT, DOC_EXT, IMAGE_EXT, VIDEO_EXT, sniff
 
 LOOKALIKE_EXT = IMAGE_EXT | APP_EXT | {".icns"}  # searched by how they look
-PICKABLE_EXT = LOOKALIKE_EXT | DOC_EXT | CODE_EXT | ARCHIVE_EXT  # what + and drops accept
+PICKABLE_EXT = LOOKALIKE_EXT | DOC_EXT | CODE_EXT | ARCHIVE_EXT | VIDEO_EXT | AUDIO_EXT  # + and drops
 
 RESOURCES = Path(__file__).parent / "resources"
 
@@ -44,9 +44,9 @@ COLORS = {
     "alert": "#E8B84A",
 }
 KIND_WORDS = {"image": "Picture", "document": "Writing", "code": "Code", "app": "App",
-              "archive": "Archive"}
-CHIPS = [("all", "Everything"), ("image", "Pictures"), ("document", "Writing"),
-         ("code", "Code"), ("app", "Apps"), ("archive", "Archives")]
+              "archive": "Archive", "video": "Video", "audio": "Sound"}
+CHIPS = [("all", "Everything"), ("image", "Pictures"), ("video", "Videos"), ("audio", "Sound"),
+         ("document", "Writing"), ("code", "Code"), ("app", "Apps"), ("archive", "Archives")]
 COLUMN = 620  # width of the centered home column
 SERIF = "Instrument Serif"  # replaced with the loaded family name at startup
 
@@ -81,6 +81,7 @@ def stylesheet(c):
     }}
     QPushButton#go:hover {{ background: {c['accent']}; }}
     QPushButton#quiet {{ margin: 0; }}
+    QPushButton#tab {{ margin: 0; padding: 6px 1px; }}
     QPushButton#plus {{
         margin: 0; padding: 0; min-width: 48px; max-width: 48px; min-height: 48px; max-height: 48px;
         background: {c['field']}; border: 1px solid {c['line']}; border-radius: 8px;
@@ -380,8 +381,8 @@ class ResultCard(QWidget):
         tile.setFixedSize(60, 60)
         tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview = result.get("preview")
-        pix = QPixmap(preview) if result["kind"] in ("image", "app") and preview else QPixmap()
-        if not pix.isNull() and result["kind"] == "image":
+        pix = QPixmap(preview) if result["kind"] in ("image", "app", "video", "audio") and preview else QPixmap()
+        if not pix.isNull() and result["kind"] in ("image", "video", "audio"):
             tile.setPixmap(rounded(pix, 60, 6))
         elif not pix.isNull():
             tile.setPixmap(pix.scaled(48, 48, Qt.AspectRatioMode.KeepAspectRatio,
@@ -406,8 +407,10 @@ class ResultCard(QWidget):
         where.setToolTip(str(folder))
         self.texts.append(selectable(where))
         text.addWidget(where)
-        if result["kind"] in ("document", "code", "archive") and preview:
-            peek = QLabel(" ".join(preview.split())[:160])
+        line = result.get("summary") if result["kind"] in ("video", "audio") else (
+            preview if result["kind"] in ("document", "code", "archive") else None)
+        if line:
+            peek = QLabel(" ".join(line.split())[:160])
             peek.setObjectName("muted")
             peek.setMinimumWidth(1)  # let the row shrink instead of the preview widening it
             peek.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
@@ -781,7 +784,7 @@ class Window(QMainWindow):
         lay.addSpacing(4)
 
         chips = QHBoxLayout()
-        chips.setSpacing(8)
+        chips.setSpacing(16)
         self.chip_group = QButtonGroup(self)
         for key, label in CHIPS:
             btn = QPushButton(label)
@@ -790,6 +793,8 @@ class Window(QMainWindow):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _=False, k=key: self._set_filter(k))
             btn.setProperty("key", key)
+            btn.setObjectName("tab")
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # never cut a label short
             self.chip_group.addButton(btn)
             chips.addWidget(btn)
         chips.insertStretch(0)
@@ -1022,6 +1027,8 @@ class Window(QMainWindow):
             f"Writing ({globs(DOC_EXT)})",
             f"Code ({globs(CODE_EXT)})",
             f"Archives ({globs(ARCHIVE_EXT)})",
+            f"Videos ({globs(VIDEO_EXT)})",
+            f"Sound ({globs(AUDIO_EXT)})",
         ])
         path, _ = QFileDialog.getOpenFileName(
             self, "Find things like this", str(Path.home()), filters)
@@ -1032,6 +1039,15 @@ class Window(QMainWindow):
         if path.suffix.lower() in LOOKALIKE_EXT:
             self._use_image(path)
             return
+        if path.suffix.lower() in VIDEO_EXT:
+            # A video is matched by how it looks: its middle frame.
+            try:
+                thumb = sniff(path)[1]
+            except Exception:
+                thumb = None
+            if thumb:
+                self._use_image(Path(thumb))
+                return
         try:
             found = sniff(path)
         except Exception:

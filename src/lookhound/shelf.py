@@ -124,6 +124,9 @@ class Shelf:
             c.execute("ALTER TABLE files ADD COLUMN ready INTEGER NOT NULL DEFAULT 1")
         if "added" not in [r[1] for r in c.execute("PRAGMA table_info(files)").fetchall()]:
             c.execute("ALTER TABLE files ADD COLUMN added REAL")
+        # A line about a video or sound file: its length, artist, album.
+        if "summary" not in [r[1] for r in c.execute("PRAGMA table_info(files)").fetchall()]:
+            c.execute("ALTER TABLE files ADD COLUMN summary TEXT")
         c.execute(
             """CREATE TABLE IF NOT EXISTS chunks (
                 id INTEGER PRIMARY KEY,
@@ -198,13 +201,14 @@ class Shelf:
         self.conn.commit()
 
     def put(self, path, name, kind, mtime, preview, vectors, commit=True, ready=READ, added=None,
-            words=""):
+            words="", summary=None):
         """vectors: {space: ndarray of shape (n, dim)}"""
         c = self.conn
         self._drop(path)
         cur = c.execute(
-            "INSERT INTO files (path, name, kind, mtime, preview, ready, added) VALUES (?,?,?,?,?,?,?)",
-            (path, name, kind, mtime, preview, ready, added),
+            "INSERT INTO files (path, name, kind, mtime, preview, ready, added, summary) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (path, name, kind, mtime, preview, ready, added, summary),
         )
         self._add_vectors(cur.lastrowid, vectors)
         if self.has_words:
@@ -305,6 +309,13 @@ class Shelf:
         ).fetchall()
         return [{"path": r[0], "name": r[1], "kind": r[2]} for r in rows]
 
+    def of_kinds(self, kinds, limit=200):
+        """Recently added files of the given kinds, for searches like "video"."""
+        marks = ",".join("?" * len(kinds))
+        return self.conn.execute(
+            f"SELECT id, kind FROM files WHERE kind IN ({marks}) ORDER BY added DESC LIMIT ?",
+            (*kinds, limit)).fetchall()
+
     def word_hits(self, text, limit=300):
         """Exact-word matches for a query: {file_id: (content score 0-1, share of
         the query's words found in the name)}. Names count far more than contents."""
@@ -333,11 +344,12 @@ class Shelf:
             return {}
         marks = ",".join("?" * len(file_ids))
         rows = self.conn.execute(
-            f"SELECT id, path, name, kind, preview FROM files WHERE id IN ({marks})",
+            f"SELECT id, path, name, kind, preview, summary FROM files WHERE id IN ({marks})",
             list(file_ids),
         ).fetchall()
         return {
-            r[0]: {"path": r[1], "name": r[2], "kind": r[3], "preview": r[4]} for r in rows
+            r[0]: {"path": r[1], "name": r[2], "kind": r[3], "preview": r[4], "summary": r[5]}
+            for r in rows
         }
 
 

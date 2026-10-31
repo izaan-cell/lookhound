@@ -4,6 +4,22 @@ The full story of every version. This file is the source for the changelog on
 lookhound.spools.studio/changelog and for each GitHub release's notes, so every
 release must have a section here.
 
+## 0.3.4
+_Released 31 October 2026_
+
+Lookhound now finds your videos and sound: videos by what's in them, songs and recordings by their title, artist, album and cover art.
+
+### New
+- **Video search.** Lookhound looks at frames spread through each video (MP4, MOV, MKV, WebM, AVI and more), so "beach sunset video" finds videos that show one. Drop a picture or a video on the window to find videos that look like it. Only a few frames are read, so even a 23-minute, 485 MB video takes about a second.
+- **Sound search.** MP3, M4A, WAV, FLAC, OGG and more are found by their name and tags: title, artist, album and genre. "jazz by nora keys" finds the song. Cover art inside the file works like a picture.
+- **Videos and Sound tabs** next to Pictures.
+- **Thumbnails and details.** Videos show a frame from inside them and their length; songs show their cover art, length, artist and album.
+- **Movies and Music folders.** Lookhound now looks in your Movies (Videos on Windows) and Music folders too. If you've set it up before, they're added once automatically; you can remove them under Folders.
+- **"video", "songs", "photos" work as you'd expect.** A search that's just a kind of file lists all of that kind, and words like "video" in a longer search favour that kind: "beach video" prefers videos.
+
+### Improvements
+- The filter tabs fit at every window size, however many there are, and never get cut off.
+
 ## 0.3.3
 _Released 31 October 2026_
 

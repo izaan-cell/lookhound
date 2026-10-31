@@ -181,7 +181,8 @@ class Scout(QObject):
                 added = None
             ready = BY_NAME if payloads.get("_by_name") else PARTLY if waits else READ
             shelf.put(str(path), path.name, kind, mtime, preview, vecs, commit=False,
-                      ready=ready, added=added, words=payloads.get("_words", ""))
+                      ready=ready, added=added, words=payloads.get("_words", ""),
+                      summary=payloads.get("_summary"))
             if waits:
                 later.append((str(path), payloads["code"]))
         shelf.commit()

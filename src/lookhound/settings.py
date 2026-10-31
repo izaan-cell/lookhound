@@ -6,7 +6,7 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 # Where the updater looks for new releases.
 UPDATE_REPO = "izaan-cell/lookhound"
@@ -24,9 +24,13 @@ ICON_CACHE.mkdir(exist_ok=True)
 PREFS_PATH = DATA_DIR / "prefs.json"
 
 
+# Where videos and sound usually live: added to the defaults in 0.3.4.
+MEDIA_FOLDERS = ["Movies", "Music"] if IS_MAC else ["Videos", "Music"]
+
+
 def _default_folders():
     home = Path.home()
-    names = ["Desktop", "Documents", "Downloads", "Pictures"]
+    names = ["Desktop", "Documents", "Downloads", "Pictures"] + MEDIA_FOLDERS
     folders = [home / n for n in names if (home / n).is_dir()]
     if IS_MAC:
         folders.append(Path("/Applications"))
@@ -46,6 +50,14 @@ def load_prefs():
     except (OSError, ValueError):
         prefs = {}
     prefs.setdefault("folders", _default_folders())
+    if not prefs.get("media_folders_added"):
+        # Once, for people who set Lookhound up before it searched video and sound.
+        for name in MEDIA_FOLDERS:
+            folder = str(Path.home() / name)
+            if (Path.home() / name).is_dir() and folder not in prefs["folders"]:
+                prefs["folders"].append(folder)
+        prefs["media_folders_added"] = True
+        save_prefs(prefs)
     return prefs
 
 

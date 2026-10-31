@@ -29,6 +29,9 @@ CODE_EXT = {
 }
 # Settings and data files: worth finding by name and gist, not worth the code model.
 DATA_EXT = {".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".css", ".scss"}
+VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".wmv", ".mpg", ".mpeg", ".3gp", ".flv"}
+AUDIO_EXT = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".oga", ".opus", ".wma", ".aif", ".aiff", ".alac"}
+VIDEO_FRAMES = 4  # spread through each video, read by the picture model
 # .gz, .bz2 and .xz are usually tarballs; a lone compressed file is found by name.
 ARCHIVE_EXT = {".zip", ".7z", ".rar", ".tar", ".tgz", ".tbz2", ".txz", ".gz", ".bz2", ".xz"}
 APP_EXT = {".app"} if IS_MAC else ({".lnk", ".exe"} if IS_WIN else set())
@@ -109,6 +112,10 @@ def kind_of(path: Path):
         return "document"
     if ext in ARCHIVE_EXT:
         return "archive"
+    if ext in VIDEO_EXT:
+        return "video"
+    if ext in AUDIO_EXT:
+        return "audio"
     if ext in CODE_EXT:
         return "code"
     return None
@@ -256,6 +263,116 @@ def _sniff_archive(path: Path, name):
     return "archive", preview, {"text": chunks, "_words": words}
 
 
+def _clock(seconds):
+    seconds = int(seconds or 0)
+    return f"{seconds // 3600}:{seconds // 60 % 60:02d}:{seconds % 60:02d}" if seconds >= 3600 \
+        else f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _tags(path):
+    """Title, artist, album, genre and so on, from any audio or video file's tags."""
+    try:
+        import mutagen
+
+        media = mutagen.File(path, easy=True)
+    except Exception:
+        return {}, None
+    if media is None:
+        return {}, None
+    tags = {}
+    for key in ("title", "artist", "albumartist", "album", "genre", "date", "comment", "description"):
+        value = (media.tags or {}).get(key) if media.tags else None
+        if value:
+            tags[key] = ", ".join(str(v) for v in value) if isinstance(value, list) else str(value)
+    length = getattr(getattr(media, "info", None), "length", None)
+    return tags, length
+
+
+def _cover_art(path):
+    """The picture embedded in an audio file (album art), if it has one."""
+    import io
+
+    import mutagen
+
+    try:
+        media = mutagen.File(path)
+    except Exception:
+        return None
+    if media is None:
+        return None
+    data = None
+    tags = media.tags or {}
+    for key in getattr(tags, "keys", lambda: [])():
+        if key.startswith("APIC"):  # MP3
+            data = tags[key].data
+            break
+    if data is None and "covr" in tags:  # M4A
+        data = bytes(tags["covr"][0])
+    if data is None and getattr(media, "pictures", None):  # FLAC
+        data = media.pictures[0].data
+    if not data:
+        return None
+    try:
+        return Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        return None
+
+
+def _sniff_video(path: Path, name):
+    """A few frames spread through the video for the picture model, plus its
+    name, tags and length for words. Only those frames are decoded."""
+    import av
+
+    frames = []
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        length = float(container.duration / av.time_base) if container.duration else 0.0
+        meta = {k.lower(): v for k, v in (container.metadata or {}).items()}
+        for i in range(VIDEO_FRAMES):
+            at = length * (i + 0.5) / VIDEO_FRAMES
+            try:
+                container.seek(int(at / stream.time_base), stream=stream, any_frame=False)
+                frame = next(container.decode(stream))
+            except Exception:
+                continue
+            image = frame.to_image()
+            image.thumbnail((384, 384))
+            frames.append(image.convert("RGB"))
+    if not frames:
+        raise ValueError("no frames could be read")
+    tags, _ = _tags(path)
+    about = ", ".join(v for v in [meta.get("title"), tags.get("title"), meta.get("comment"),
+                                  tags.get("artist")] if v)
+    thumb = _cache_path(path)
+    frames[len(frames) // 2].copy().save(thumb, "JPEG", quality=82)
+    words = words_of(" ".join([name, path.name, about, "video"]))
+    return "video", str(thumb), {"clip": frames, "text": [f"{name} video {about}".strip()], "_words": words,
+                                 "_summary": " · ".join(p for p in [_clock(length), about] if p)}
+
+
+def _sniff_audio(path: Path, name):
+    """Sound is found by its name and tags (title, artist, album, genre), and by
+    its cover art if it has some."""
+    tags, length = _tags(path)
+    who = tags.get("artist") or tags.get("albumartist")
+    parts = [tags.get("title"), f"by {who}" if who else None,
+             f"from {tags['album']}" if tags.get("album") else None, tags.get("genre")]
+    about = " ".join(p for p in parts if p)
+    payloads = {"text": [f"{name} {about} sound audio".strip()],
+                "_words": words_of(" ".join([name, path.name] + list(tags.values())))}
+    preview = None
+    cover = _cover_art(path)
+    if cover is not None:
+        cover.thumbnail((256, 256))
+        preview = str(_cache_path(path))
+        cover.save(preview, "JPEG", quality=82)
+        payloads["clip"] = [cover]
+    summary = " · ".join(p for p in [_clock(length) if length else None, who, tags.get("album")] if p)
+    payloads["_summary"] = summary
+    return "audio", preview, payloads
+
+
 def _readable_name(path: Path):
     return re.sub(r"[_\-.]+", " ", path.stem)
 
@@ -325,6 +442,10 @@ def _sniff(path, kind, name, icon_for):
 
     if kind == "archive":
         return _sniff_archive(path, name)
+    if kind == "video":
+        return _sniff_video(path, name)
+    if kind == "audio":
+        return _sniff_audio(path, name)
 
     text = _read_text(path)[:READ_CAP]
     words = words_of(f"{name}\n{text}")
